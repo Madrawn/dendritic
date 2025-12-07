@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from typing import Optional, List, Union
+import datetime
+from typing import Optional, List, Union, Dict, Any
 
 def enhance_model_with_dendritic(
     model: nn.Module,
@@ -36,7 +37,7 @@ def enhance_model_with_dendritic(
 
     Example:
         >>> from transformers import GPT2LMHeadModel
-        >>> from DendriticLayer import DendriticLayer, DendriticStack
+        >>> from dendritic.layer import DendriticLayer, DendriticStack
         >>> model = GPT2LMHeadModel.from_pretrained('gpt2')
         >>> model = enhance_model_with_dendritic(
         ...     model,
@@ -122,34 +123,30 @@ def enhance_model_with_dendritic(
 
                 # Custom patching logic for DendriticStack
                 with torch.no_grad():
-                    if dendritic_cls.__name__ == "DendriticStack":
+                    if hasattr(dendritic, "base_linear") and dendritic_cls.__name__ == "DendriticStack":
                         src_weight = module.weight if not is_conv1d else module.weight.t().contiguous()
                         
                         # 1. Copy original weights to base_linear (The Identity Path)
-                        if hasattr(dendritic, "base_linear"):
-                            dendritic.base_linear.weight.copy_(src_weight)
-                            if has_bias and dendritic.base_linear.bias is not None:
-                                dendritic.base_linear.bias.copy_(module.bias)
+                        dendritic.base_linear.weight.copy_(src_weight)
+                        if has_bias and dendritic.base_linear.bias is not None:
+                            dendritic.base_linear.bias.copy_(module.bias)
                         
                         # 2. ZERO OUT the new branch (The Stack Path)
-                        # If we zero the FINAL layer of the stack, the whole stack outputs 0.
-                        # This ensures: Output = Original_Weights(x) + 0
                         if hasattr(dendritic.layer2, "linear"):
                             dendritic.layer2.linear.weight.zero_()
                             if dendritic.layer2.linear.bias is not None:
                                 dendritic.layer2.linear.bias.zero_()
                             
-                            # Zero out polynomial components of output layer
+                            # Zero out polynomial components
+                            dendritic.layer1.scale.fill_(0.0)
                             dendritic.layer2.scale.fill_(0.0)
+                            if hasattr(dendritic.layer1, "diag_scale"):
+                                dendritic.layer1.diag_scale.fill_(0.0)
                             if hasattr(dendritic.layer2, "diag_scale"):
                                 dendritic.layer2.diag_scale.fill_(0.0)
-                        
-                        # (Optional) Initialize internal layers to reasonable small values
-                        # to aid gradient flow once training starts, even though output is 0
-                        # This is handled by default init, so we just ensure the output is killed.
 
                     else:
-                        # Existing logic for DendriticLayer (single layer)
+                        # For DendriticLayer
                         if hasattr(dendritic, "linear") and hasattr(module, "weight"):
                             if is_conv1d:
                                 dendritic.linear.weight.copy_(module.weight.t().contiguous())
@@ -159,28 +156,26 @@ def enhance_model_with_dendritic(
                                 dendritic.linear.bias.copy_(module.bias)
                         if hasattr(dendritic, "scale"):
                             dendritic.scale.fill_(init_scale)
+                        if hasattr(dendritic, "diag_scale"):
+                            dendritic.diag_scale.fill_(init_scale)
 
-                # Freeze linear pathway logic update
+                # Freeze linear pathway
                 if freeze_linear:
-                    # Case A: DendriticStack (Residual Architecture)
-                    # We freeze the 'base_linear' which holds the original weights.
-                    # We leave layer1 and layer2 (the adapter) fully trainable.
+                    if hasattr(dendritic, "linear"):
+                        dendritic.linear.weight.requires_grad = False
+                        if dendritic.linear.bias is not None:
+                            dendritic.linear.bias.requires_grad = False
+                    
                     if hasattr(dendritic, "base_linear"):
                         dendritic.base_linear.weight.requires_grad = False
                         if dendritic.base_linear.bias is not None:
                             dendritic.base_linear.bias.requires_grad = False
 
-                    # Case B: DendriticLayer (Direct Replacement)
-                    # We freeze the 'linear' part (original weights).
-                    # We leave 'w1', 'w2', 'poly_out' etc. trainable.
-                    elif hasattr(dendritic, "linear"):
-                        dendritic.linear.weight.requires_grad = False
-                        if dendritic.linear.bias is not None:
-                            dendritic.linear.bias.requires_grad = False
-                            
-                # Unfreeze dendritic pathway (polynomial) parameters
+                # Collect dendritic parameters
                 for n, p in dendritic.named_parameters():
-                    if n.startswith("w1") or n.startswith("w2") or n.startswith("w_out") or n.startswith("scale"):
+                    if (n.startswith("w1") or n.startswith("w2") or 
+                        n.startswith("w_") or n.startswith("scale") or 
+                        n.startswith("diag") or n.startswith("poly_")):
                         p.requires_grad = True
                         dendritic_param_ids.add(id(p))
 
@@ -204,7 +199,7 @@ def enhance_model_with_dendritic(
                     child_name = name.split('.')[-1]
                     parent = model.get_submodule(parent_name)
                 else:
-                    # Direct child of root module (e.g., 'fc1' in model.fc1)
+                    # Direct child of root module
                     parent = model
                     child_name = name
 
@@ -215,41 +210,27 @@ def enhance_model_with_dendritic(
         setattr(parent, child_name, new_module)
 
     # Print trainable parameter names for verification
-    print("\nTrainable parameters after enhancement:")
-    for n, p in model.named_parameters():
-        if p.requires_grad:
-            print(f"  {n} | shape={tuple(p.shape)}")
+    if verbose:
+        print("\nTrainable parameters after enhancement:")
+        for n, p in model.named_parameters():
+            if p.requires_grad:
+                print(f"  {n} | shape={tuple(p.shape)}")
 
-    if verbose and conversions:
-        total_params_before = sum(c['linear_params'] for c in conversions)
-        total_params_after = sum(c['dendritic_params'] for c in conversions)
-        total_trainable = sum(c['trainable_params'] for c in conversions)
+        if conversions:
+            total_params_before = sum(c['linear_params'] for c in conversions)
+            total_params_after = sum(c['dendritic_params'] for c in conversions)
+            total_trainable = sum(c['trainable_params'] for c in conversions)
 
-        print(f"\n{'='*70}")
-        print("Dendritic Enhancement Summary")
-        print(f"{'='*70}")
-        print(f"Converted {len(conversions)} layer(s)")
-        print(f"Parameters before:  {total_params_before:>12,}")
-        print(f"Parameters after:   {total_params_after:>12,}")
-        print(f"Added parameters:   {total_params_after - total_params_before:>12,} "
-              f"(+{(total_params_after/total_params_before-1)*100:.2f}%)")
-        print(f"\nTrainable params:   {total_trainable:>12,} "
-              f"({100*total_trainable/total_params_after:.2f}% of enhanced layers)")
-
-        if freeze_linear:
-            print(f"Frozen params:      {total_params_before:>12,} (original linear weights)")
-
-        # Show per-layer breakdown
-        print(f"\n{'Layer':<45} {'Rank':<6} {'Added':<12} {'Trainable':<12}")
-        print(f"{'-'*70}")
-        for conv in conversions[:10]:  # Show first 10
-            print(f"{conv['name'][:45]:<45} {conv['poly_rank']:<6} "
-                  f"{conv['added_params']:>11,} {conv['trainable_params']:>11,}")
-
-        if len(conversions) > 10:
-            print(f"... and {len(conversions) - 10} more layers")
-
-        print(f"{'='*70}\n")
+            print(f"\n{'='*70}")
+            print("Dendritic Enhancement Summary")
+            print(f"{'='*70}")
+            print(f"Converted {len(conversions)} layer(s)")
+            print(f"Parameters before:  {total_params_before:>12,}")
+            print(f"Parameters after:   {total_params_after:>12,}")
+            print(f"Added parameters:   {total_params_after - total_params_before:>12,} "
+                  f"(+{(total_params_after/total_params_before-1)*100:.2f}%)")
+            print(f"\nTrainable params:   {total_trainable:>12,} "
+                  f"({100*total_trainable/total_params_after:.2f}% of enhanced layers)")
 
     return model
 
@@ -287,36 +268,173 @@ def get_polynomial_stats(model):
     """
     Get statistics about polynomial pathways in the model.
     
-    Returns dict with scale values and effective ranks for each dendritic layer.
+    Returns dict with scale values for each dendritic layer.
     """
-    from .layer import DendriticLayer
+    from .layer import DendriticLayer, DendriticStack
     
     stats = {}
     for name, module in model.named_modules():
-        if isinstance(module, DendriticLayer):
+        if isinstance(module, (DendriticLayer, DendriticStack)):
             with torch.no_grad():
-                scale = module.scale.item()
+                scale = getattr(module, 'scale', 0.0).item()
                 
-                # Effective rank via singular values
+                # Handle DendriticStack layers
+                if hasattr(module, 'layer1') and hasattr(module.layer1, 'scale'):
+                    scale = (scale + module.layer1.scale.item()) / 2
+                if hasattr(module, 'layer2') and hasattr(module.layer2, 'scale'):
+                    scale = (scale + module.layer2.scale.item()) / 2
+                
+                # Effective rank calculation
                 try:
-                    U, S, V = torch.svd(module.w1)
-                    eff_rank = (S.sum() ** 2) / (S ** 2).sum()
-                    eff_rank = eff_rank.item()
+                    if hasattr(module, 'w1'):
+                        _, S, _ = torch.svd(module.w1)
+                        eff_rank = (S.sum() ** 2) / (S ** 2).sum()
+                        eff_rank = eff_rank.item()
+                    else:
+                        eff_rank = None
                 except:
                     eff_rank = None
                 
                 stats[name] = {
-                    'scale': scale,
+                    'scale': abs(scale),
                     'eff_rank': eff_rank,
-                    'poly_rank': module.poly_rank
+                    'poly_rank': getattr(module, 'poly_rank', 'N/A')
                 }
     
     return stats
 
 
+def extract_dendritic_state(model: nn.Module) -> Dict[str, Any]:
+    """
+    Extract only the trainable dendritic parameters from an enhanced model.
+    
+    This creates a much smaller state dict than saving the entire model,
+    containing only the actual trained parameters (polynomial pathways etc.)
+    while excluding the original frozen weights.
+    
+    Args:
+        model: Enhanced model with dendritic layers
+    
+    Returns:
+        Dictionary containing:
+        - Trainable dendritic parameters
+        - Metadata with version, timestamp, and parameter count
+    
+    Example:
+        >>> enhanced = enhance_model_with_dendritic(model, target_layers=['mlp.c_fc'])
+        >>> dendritic_state = extract_dendritic_state(enhanced)
+        >>> torch.save(dendritic_state, 'dendritic_weights.pt')
+    """
+    state = {
+        '_metadata': {
+            'version': '1.0',
+            'timestamp': datetime.datetime.now().isoformat(),
+            'description': 'Extracted dendritic state (trainable parameters only)'
+        }
+    }
+    
+    # Track parameters
+    num_params = 0
+    
+    # Extract parameters from all modules
+    for module in model.modules():
+        # Handle DendriticLayers and custom components
+        for name, param in module.named_parameters(recurse=False):
+            if param.requires_grad:
+                state[f"{module._get_name()}.{name}"] = param.data.cpu().clone()
+                num_params += 1
+    
+    # Update metadata
+    state['_metadata']['num_params'] = num_params
+    
+    return state
+
+
+def load_dendritic_state(model: nn.Module, state_dict: Dict[str, Any]) -> nn.Module:
+    """
+    Load dendritic state dict into an already enhanced model.
+    
+    Args:
+        model: Enhanced model (must be compatible with the state_dict)
+        state_dict: State dictionary from extract_dendritic_state()
+    
+    Returns:
+        Model with loaded dendritic state
+        
+    Note:
+        Model must have the same architecture as the one used to create the state_dict.
+        Only parameters that exist in the model and are trainable will be updated.
+        
+    Example:
+        >>> enhanced = enhance_model_with_dendritic(model, target_layers=['mlp.c_fc'])
+        >>> dendritic_state = torch.load('dendritic_weights.pt')
+        >>> enhanced = load_dendritic_state(enhanced, dendritic_state)
+    """
+    # Remove metadata for loading
+    state_dict = {k: v for k, v in state_dict.items() if not k.startswith('_')}
+    
+    # Load parameters
+    model_state = model.state_dict()
+    for name, param in state_dict.items():
+        if name in model_state:
+            if model_state[name].shape == param.shape:
+                model_state[name].copy_(param)
+            else:
+                print(f"Warning: Shape mismatch for {name} "
+                      f"(expected {model_state[name].shape}, got {param.shape})")
+    
+    model.load_state_dict(model_state, strict=False)
+    return model
+
+
+def create_dendritic_state(
+    base_model: nn.Module,
+    state_dict: Optional[Dict[str, Any]] = None,
+    enhancement_params: Optional[Dict] = None
+) -> nn.Module:
+    """
+    Create or recreate an enhanced model with optional stored state.
+    
+    This is a helper function that combines model enhancement with state loading.
+    It ensures the model is properly enhanced before loading any saved state.
+    
+    Args:
+        base_model: Base pre-trained model to enhance
+        state_dict: Optional state from extract_dendritic_state()
+        enhancement_params: Parameters for enhance_model_with_dendritic
+        
+    Returns:
+        Enhanced model with loaded state (if provided)
+        
+    Example:
+        >>> base_model = GPT2LMHeadModel.from_pretrained('gpt2')
+        >>> dendritic_state = torch.load('dendritic_weights.pt')
+        >>> enhanced = create_dendritic_state(
+        ...     base_model,
+        ...     state_dict=dendritic_state,
+        ...     enhancement_params={
+        ...         'target_layers': ['mlp.c_fc'],
+        ...         'poly_rank': 32,
+        ...         'freeze_linear': True
+        ...     }
+        ... )
+    """
+    if enhancement_params is None:
+        enhancement_params = {}
+    
+    # Create enhanced model
+    enhanced_model = enhance_model_with_dendritic(base_model, **enhancement_params)
+    
+    # Load state if provided
+    if state_dict is not None:
+        enhanced_model = load_dendritic_state(enhanced_model, state_dict)
+    
+    return enhanced_model
+
+
 # Example usage
 if __name__ == "__main__":
-    print("Example: Enhancing a simple model\n")
+    print("Example: Enhancing and saving model state\n")
     
     # Create a simple model
     class SimpleModel(nn.Module):
@@ -331,39 +449,32 @@ if __name__ == "__main__":
             x = torch.relu(self.fc2(x))
             return self.fc3(x)
     
+    # Create and enhance model
     model = SimpleModel()
-    
-    # Enhance only fc1 and fc2, leave fc3 as standard linear
-    model_enhanced = enhance_model_with_dendritic(
+    enhanced = enhance_model_with_dendritic(
         model,
-        target_layers=['fc1', 'fc2'],
-        poly_rank=8,
+        target_layers=["fc1"],
+        poly_rank=16,
         freeze_linear=True
     )
-
-    # Verify identity initialization
-    test_input = torch.randn(4, 128)
-    diff = verify_identity_initialization(model, model_enhanced, test_input)
-    print(f"Max output difference (DendriticLayer): {diff:.2e} (should be ~1e-6 or less)\n")
-
-    # Check what's trainable
-    trainable = sum(p.numel() for p in model_enhanced.parameters() if p.requires_grad)
-    total = sum(p.numel() for p in model_enhanced.parameters())
-    print(f"Trainable parameters (DendriticLayer): {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
-
-    # Now test with DendriticStack
-    from .layer import DendriticStack
-    model_stack = SimpleModel()
-    model_enhanced_stack = enhance_model_with_dendritic(
-        model_stack,
-        target_layers=['fc1', 'fc2'],
-        poly_rank=8,
-        freeze_linear=True,
-        dendritic_cls=DendriticStack,
-        dendritic_kwargs={"bottleneck_dim": 64, "dropout": 0.1}
+    
+    # Extract and save dendritic state
+    state = extract_dendritic_state(enhanced)
+    print(f"Extracted state with {state['_metadata']['num_params']} parameters")
+    print("Parameter keys:", [k for k in state.keys() if not k.startswith('_')][:5], "...")
+    
+    # Create new enhanced model with saved state
+    new_enhanced = create_dendritic_state(
+        model,
+        state_dict=state,
+        enhancement_params={
+            "target_layers": ["fc1"],
+            "poly_rank": 16,
+            "freeze_linear": True
+        }
     )
-    diff_stack = verify_identity_initialization(model_stack, model_enhanced_stack, test_input)
-    print(f"Max output difference (DendriticStack): {diff_stack:.2e} (should be ~1e-6 or less)\n")
-    trainable_stack = sum(p.numel() for p in model_enhanced_stack.parameters() if p.requires_grad)
-    total_stack = sum(p.numel() for p in model_enhanced_stack.parameters())
-    print(f"Trainable parameters (DendriticStack): {trainable_stack:,} / {total_stack:,} ({100*trainable_stack/total_stack:.2f}%)")
+    
+    # Verify same outputs
+    test_input = torch.randn(2, 128)
+    diff = verify_identity_initialization(enhanced, new_enhanced, test_input)
+    print(f"Model output difference after loading state: {diff:.6f}")
