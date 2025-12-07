@@ -5,6 +5,70 @@ from torch.utils.data import DataLoader
 from dendritic.enhancement import enhance_model_with_dendritic, get_polynomial_stats
 from dendritic.layer import DendriticLayer, DendriticStack
 from tqdm import tqdm
+import time
+import datetime
+import json
+import os
+import psutil
+import torch.distributed as dist
+
+# =====================
+# Experiment Tracking
+# =====================
+def get_gpu_mem_usage():
+    if not torch.cuda.is_available():
+        return 0
+    return torch.cuda.max_memory_allocated() / 1024**3  # Return in GB
+
+class ExperimentTracker:
+    def __init__(self, method_name, params):
+        self.start_time = time.time()
+        self.method_name = method_name
+        self.params = params
+        self.results_dir = "results"
+        os.makedirs(self.results_dir, exist_ok=True)
+        self.results = {
+            "experiment_id": f"{method_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "method": method_name,
+            "params": params,
+            "resources": {},
+            "metrics": {},
+            "training_samples": []
+        }
+    
+    def add_metric(self, name, value, step=None):
+        """Add a metric, optionally at a specific step."""
+        if step is not None:
+            if "training_samples" not in self.results:
+                self.results["training_samples"] = []
+            self.results["training_samples"].append({
+                "step": step,
+                "time_sec": time.time() - self.start_time,
+                name: value
+            })
+        else:
+            self.results["metrics"][name] = value
+    
+    def finalize(self, model):
+        """Save experiment results to file."""
+        # Record final stats
+        self.results["resources"]["total_time_min"] = (time.time() - self.start_time) / 60
+        self.results["resources"]["peak_gpu_mem_gb"] = get_gpu_mem_usage()
+        
+        # Parameter counts
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        self.results["resources"]["total_params"] = total_params
+        self.results["resources"]["trainable_params"] = trainable_params
+        
+        # Save to file
+        filename = os.path.join(self.results_dir, f"{self.results['experiment_id']}.json")
+        with open(filename, 'w') as f:
+            json.dump(self.results, f, indent=2)
+        
+        return self.results
+
 
 # =====================
 # Experiment Constants
@@ -329,18 +393,52 @@ print("\n" + "="*70)
 print("FINAL RESULTS")
 print("="*70)
 
+final_eval_start = time.time()
 final_ppl = evaluate(model_dendritic, eval_dataloader)
+final_eval_time = time.time() - final_eval_start
 
+print(f"Final evaluation took {final_eval_time:.1f} seconds")
 print(f"\nBaseline perplexity:     {baseline_ppl:.2f}")
 print(f"Dendritic perplexity:    {final_ppl:.2f}")
 print(f"Best eval during train:  {best_eval_ppl:.2f}")
 
-
 improvement = baseline_ppl - final_ppl
+improvement_pct = 100 * improvement / baseline_ppl if baseline_ppl != 0 else 0.0
+
 if improvement > 0:
-    print(f"Improvement:             {improvement:.2f} ({100*improvement/baseline_ppl:.1f}%)")
+    print(f"Improvement:             {improvement:.2f} ({improvement_pct:.1f}%)")
 else:
-    print(f"Degradation:             {-improvement:.2f} ({-100*improvement/baseline_ppl:.1f}%)")
+    print(f"Degradation:             {-improvement:.2f} ({-improvement_pct:.1f}%)")
+
+# Add metrics and finalize training results
+metrics_to_add = {
+    "final_ppl": final_ppl,
+    "best_eval_ppl": best_eval_ppl,
+    "baseline_ppl": baseline_ppl,
+    "relative_improvement": improvement_pct / 100,
+    "final_eval_time": final_eval_time,
+    "trainable_parameters": trainable,
+    "total_parameters": total,
+    "training_steps": TRAINING_STEPS
+}
+
+for name, value in metrics_to_add.items():
+    train_tracker.add_metric(name, float(value))
+
+# Add scale statistics
+stats = get_polynomial_stats(model_dendritic)
+scales = [abs(s['scale']) for s in stats.values()]
+scale_metrics = {
+    "avg_scale": sum(scales)/len(scales),
+    "max_scale": max(scales),
+    "min_scale": min(scales)
+}
+for name, value in scale_metrics.items():
+    train_tracker.add_metric(name, value)
+
+# Save final results
+train_results = train_tracker.finalize(model_dendritic)
+print(f"\nDendritic training results saved to: results/{train_results['experiment_id']}.json")
 
 # Interpret results
 if final_ppl < baseline_ppl * 0.5:
@@ -350,11 +448,13 @@ elif final_ppl < baseline_ppl:
 else:
     print("\n✗ No improvement. Consider different target layers or hyperparameters.")
 
-# Final sample after training
-sample_prompt = "### Instruction:\nWrite a python function to calculate factorial.\n\n### Input:\n\n\n### Output:\n"
-sample_model_output(model_dendritic, tokenizer, sample_prompt, device)
+# Final sample after training (only if we have valid results)
+if torch.isfinite(torch.tensor(final_ppl)) and final_ppl != float('inf'):
+    sample_prompt = "### Instruction:\nWrite a python function to calculate factorial.\n\n### Input:\n\n\n### Output:\n"
+    sample_model_output(model_dendritic, tokenizer, sample_prompt, device)
+else:
+    print("\nSkipping sample output due to invalid perplexity")
 
-# 11. Scale analysis
 print("\n" + "="*70)
 print("SCALE ANALYSIS")
 print("="*70)

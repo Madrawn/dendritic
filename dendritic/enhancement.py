@@ -50,7 +50,7 @@ def enhance_model_with_dendritic(
     """
     # Import default class if not provided
     if dendritic_cls is None:
-        from layer import DendriticLayer
+        from .layer import DendriticLayer
         dendritic_cls = DendriticLayer
     if dendritic_kwargs is None:
         dendritic_kwargs = {}
@@ -289,7 +289,7 @@ def get_polynomial_stats(model):
     
     Returns dict with scale values and effective ranks for each dendritic layer.
     """
-    from layer import DendriticLayer
+    from .layer import DendriticLayer
     
     stats = {}
     for name, module in model.named_modules():
@@ -352,7 +352,7 @@ if __name__ == "__main__":
     print(f"Trainable parameters (DendriticLayer): {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
 
     # Now test with DendriticStack
-    from layer import DendriticStack
+    from .layer import DendriticStack
     model_stack = SimpleModel()
     model_enhanced_stack = enhance_model_with_dendritic(
         model_stack,
