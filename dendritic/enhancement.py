@@ -179,9 +179,9 @@ def enhance_model_with_dendritic(
                             nn.init.xavier_uniform_(dendritic.w1)
                             nn.init.xavier_uniform_(dendritic.w2)
                             
-                            # Initialize polynomial output layer to zero
+                            # Initialize polynomial output layer with small random values
                             with torch.no_grad():
-                                dendritic.poly_out.data.zero_()
+                                nn.init.normal_(dendritic.poly_out, std=0.01)
                             
                             # Set scale to preserve original output
                             dendritic.scale.fill_(init_scale)
@@ -202,6 +202,7 @@ def enhance_model_with_dendritic(
 
                 # Collect dendritic parameters
                 for n, p in dendritic.named_parameters():
+                    # Mark all dendritic pathway parameters as trainable
                     if (
                         n.startswith("w1")
                         or n.startswith("w2")
@@ -209,6 +210,7 @@ def enhance_model_with_dendritic(
                         or n.startswith("scale")
                         or n.startswith("diag")
                         or n.startswith("poly_")
+                        or n.startswith("w_diag")  # Include diagonal pathway weights
                     ):
                         p.requires_grad = True
                         dendritic_param_ids.add(id(p))
