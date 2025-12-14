@@ -1,5 +1,5 @@
 from typing import Optional
-from layers.DendriticLayer import DendriticLayer
+from dendritic.layers.DendriticLayer import DendriticLayer
 
 
 import torch
