@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from dendritic.dataset_handlers import PythonAlpacaHandler, BaseDatasetHandler
 from dendritic.enhancement import enhance_model_with_dendritic
-from dendritic.layer import DendriticLayer
+from layers.DendriticLayer import DendriticLayer
 from transformers.tokenization_utils import PreTrainedTokenizer
 from datasets import Dataset
 from typing import Dict, Any
