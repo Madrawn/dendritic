@@ -4,8 +4,8 @@ from datasets import load_dataset
 import torch
 from torch.utils.data import DataLoader
 from dendritic.enhancement import enhance_model_with_dendritic, get_polynomial_stats
-from layers.DendriticLayer import DendriticLayer
-from layers.DendriticStack import DendriticStack
+from dendritic.layers.DendriticLayer import DendriticLayer
+from dendritic.layers.DendriticStack import DendriticStack
 from tqdm import tqdm
 import time
 import psutil
