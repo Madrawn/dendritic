@@ -164,14 +164,26 @@ def enhance_model_with_dendritic(
                         # For DendriticLayer
                         if hasattr(dendritic, "linear") and hasattr(module, "weight"):
                             if is_conv1d:
-                                dendritic.linear.weight.copy_(
-                                    module.weight.t().contiguous()
-                                )
+                                # For Conv1D layers, transpose weight to match Linear format
+                                src_weight = module.weight.t().contiguous()
                             else:
-                                dendritic.linear.weight.copy_(module.weight)
+                                src_weight = module.weight
+                                
+                            # Copy original weights to linear pathway
+                            dendritic.linear.weight.copy_(src_weight)
                             if has_bias:
                                 dendritic.linear.bias.copy_(module.bias)
-                        if hasattr(dendritic, "scale"):
+                            
+                            # Initialize polynomial pathway with random weights
+                            # since we can't directly use original weights
+                            nn.init.xavier_uniform_(dendritic.w1)
+                            nn.init.xavier_uniform_(dendritic.w2)
+                            
+                            # Initialize polynomial output layer to zero
+                            with torch.no_grad():
+                                dendritic.poly_out.data.zero_()
+                            
+                            # Set scale to preserve original output
                             dendritic.scale.fill_(init_scale)
                         if hasattr(dendritic, "diag_scale"):
                             dendritic.diag_scale.fill_(init_scale)
@@ -369,7 +381,7 @@ def extract_dendritic_state(model: nn.Module) -> Dict[str, Any]:
         >>> dendritic_state = extract_dendritic_state(enhanced)
         >>> torch.save(dendritic_state, 'dendritic_weights.pt')
     """
-    state = {
+    state: Dict[str, Any] = {
         "_metadata": {
             "version": "1.0",
             "timestamp": datetime.datetime.now().isoformat(),
@@ -380,12 +392,13 @@ def extract_dendritic_state(model: nn.Module) -> Dict[str, Any]:
     # Track parameters
     num_params = 0
 
-    # Extract parameters from all modules
-    for module in model.modules():
+    # Extract parameters from all modules using full module paths
+    for module_name, module in model.named_modules():
         # Handle DendriticLayers and custom components
-        for name, param in module.named_parameters(recurse=False):
+        for param_name, param in module.named_parameters(recurse=False):
             if param.requires_grad:
-                state[f"{module._get_name()}.{name}"] = param.data.cpu().clone()
+                full_key = f"{module_name}.{param_name}"
+                state[full_key] = param.data.cpu().clone()
                 num_params += 1
 
     # Update metadata
