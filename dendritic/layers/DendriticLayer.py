@@ -55,6 +55,8 @@ class DendriticLayer(nn.Module):
         diag_rank: Optional[int] | Literal['auto'] = "auto",  # Changed default to flexible
         init_scale: float = 0.1,
         bias: bool = True,
+        *args,
+        **kwargs
     ):
         super().__init__()
 
