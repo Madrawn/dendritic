@@ -1,4 +1,5 @@
-from layers.DendriticLayer import DendriticLayer
+from typing import Optional
+from dendritic.layers.DendriticLayer import DendriticLayer
 
 
 import torch
@@ -42,6 +43,8 @@ class DendriticStack(nn.Module):
         preserve_linear_path: bool = True,
     ):
         super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
 
         # ... (Existing logic for bottleneck_dim calculation) ...
         if bottleneck_dim is None:
