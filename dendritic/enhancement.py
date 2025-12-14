@@ -1,7 +1,10 @@
+import re
 import torch
 import torch.nn as nn
 import datetime
 from typing import Optional, List, Union, Dict, Any
+
+from .layers.DendriticLayer import DendriticLayer
 
 
 def enhance_model_with_dendritic(
@@ -50,9 +53,12 @@ def enhance_model_with_dendritic(
         >>> # Model behavior is identical until you finetune
         >>> # Only ~0.05% new parameters are trainable
     """
+    if poly_rank != "auto" and (not isinstance(poly_rank, int) or poly_rank <= 0):
+        raise ValueError("poly_rank must be 'auto' or a positive integer")
+
     # Import default class if not provided
     if dendritic_cls is None:
-        from .layer import DendriticLayer
+        from .layers.DendriticLayer import DendriticLayer
 
         dendritic_cls = DendriticLayer
     if dendritic_kwargs is None:
@@ -224,7 +230,8 @@ def enhance_model_with_dendritic(
                     child_name = name
 
                 replacements.append((parent, child_name, dendritic))
-
+    if not replacements:
+        raise TypeError("Warning: No layers were converted. Check target_layers patterns.")
     # Second pass: actually replace modules
     for parent, child_name, new_module in replacements:
         setattr(parent, child_name, new_module)
@@ -294,7 +301,7 @@ def get_polynomial_stats(model):
 
     Returns dict with scale values for each dendritic layer.
     """
-    from .layer import DendriticLayer, DendriticStack
+    from .layers.DendriticStack import DendriticStack
 
     stats = {}
     for name, module in model.named_modules():
