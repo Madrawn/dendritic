@@ -1,245 +1,425 @@
 import os
 import re
+import logging
 import torch
 import torch.nn as nn
 import datetime
-from typing import Optional, List, Union, Dict, Any
+from typing import Literal, Optional, List, Union, Dict, Any, Tuple, Set, Type, cast
+import torch
+from torch import Tensor
+from dataclasses import dataclass
+from pathlib import Path
 
 from .layers.DendriticLayer import DendriticLayer
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+@dataclass
+class LayerConversionStats:
+    """Data class to store statistics about layer conversion."""
+    name: str
+    linear_params: int
+    dendritic_params: int
+    trainable_params: int
+    poly_rank: int
+
+    @property
+    def added_params(self) -> int:
+        return self.dendritic_params - self.linear_params
+
+    @property
+    def trainable_percentage(self) -> float:
+        return (self.trainable_params / self.dendritic_params) * 100 if self.dendritic_params > 0 else 0.0
+
+
+class DendriticEnhancementError(Exception):
+    """Base exception for dendritic enhancement errors."""
+    pass
+
+
+class NoLayersConvertedError(DendriticEnhancementError):
+    """Raised when no layers are converted during enhancement."""
+    pass
+
+
+def _get_conv1d_class() -> Optional[Type]:
+    """Safely import and return Conv1D class if available."""
+    try:
+        from transformers.pytorch_utils import Conv1D
+        return Conv1D
+    except ImportError:
+        return None
+
+
+def _validate_enhancement_params(
+    model: nn.Module,
+    poly_rank: Union[int, Literal["auto"]],
+    target_layers: Optional[List[str]]
+) -> None:
+    """Validate enhancement parameters."""
+    if not isinstance(model, nn.Module):
+        raise TypeError("model must be a PyTorch nn.Module")
+    
+    if poly_rank != "auto" and (not isinstance(poly_rank, int) or poly_rank <= 0):
+        raise ValueError("poly_rank must be 'auto' or a positive integer")
+    
+    if target_layers is not None and not all(isinstance(p, str) for p in target_layers):
+        raise TypeError("All target_layers patterns must be strings")
+    
+    if target_layers is not None and not all(isinstance(p, str) for p in target_layers):
+        raise TypeError("All target_layers patterns must be strings")
+
+
+def _should_convert_layer(
+    name: str,
+    module: nn.Module,
+    target_layers: Optional[List[str]],
+    conv1d_class: Optional[Type]
+) -> bool:
+    """Determine if a layer should be converted to dendritic."""
+    is_linear = isinstance(module, nn.Linear)
+    is_conv1d = conv1d_class is not None and isinstance(module, conv1d_class)
+    
+    if not (is_linear or is_conv1d):
+        return False
+    
+    if target_layers is None:
+        return True
+        
+    return any(pattern in name for pattern in target_layers)
+
+
+def _create_dendritic_layer(
+    module: Union[nn.Linear, Any],  # Union with Any to handle Conv1D
+    is_conv1d: bool,
+    poly_rank: Union[int, Literal["auto"]],
+    init_scale: float,
+    device: torch.device,
+    dendritic_cls: Type[nn.Module],
+    dendritic_kwargs: Dict[str, Any]
+) -> Tuple[nn.Module, int]:
+    """
+    Create and initialize a dendritic layer with proper type handling.
+    
+    Args:
+        module: The original linear or Conv1D module to replace
+        is_conv1d: Whether the module is a Conv1D layer
+        poly_rank: Either an integer or "auto" for automatic calculation
+        init_scale: Initial scale for polynomial pathway
+        device: Device to create the dendritic layer on
+        dendritic_cls: The dendritic layer class to use
+        dendritic_kwargs: Additional keyword arguments for the dendritic layer
+        
+    Returns:
+        Tuple of (dendritic_layer, effective_poly_rank)
+    """
+    """
+    Create and initialize a dendritic layer with proper type handling.
+    
+    Returns:
+        Tuple of (dendritic_layer, effective_poly_rank)
+    """
+    """Create and initialize a dendritic layer."""
+    # Get input/output dimensions with proper type handling
+    if is_conv1d:
+        # For Conv1D, we need to access weight directly
+        weight_tensor = cast(Tensor, module.weight)
+        input_dim = weight_tensor.shape[0]  # Conv1D: (out_features, in_features)
+        output_dim = weight_tensor.shape[1]
+        has_bias = hasattr(module, 'bias') and module.bias is not None
+    else:
+        # For nn.Linear, use the proper attributes
+        linear_module = cast(nn.Linear, module)
+        input_dim = linear_module.in_features
+        output_dim = linear_module.out_features
+        has_bias = linear_module.bias is not None
+
+    # Calculate poly_rank if auto, ensuring we return an int
+    if poly_rank == "auto":
+        effective_poly_rank = max(4, input_dim // 64)
+    else:
+        effective_poly_rank = poly_rank
+
+    # Build kwargs for construction
+    layer_kwargs = {
+        "input_dim": input_dim,
+        "output_dim": output_dim,
+        "poly_rank": effective_poly_rank,
+        "init_scale": init_scale,
+        "bias": has_bias,
+        **dendritic_kwargs
+    }
+
+    # Create and initialize dendritic layer
+    dendritic = dendritic_cls(**layer_kwargs).to(device)
+    _initialize_dendritic_layer(dendritic, module, is_conv1d, init_scale)
+    
+    return dendritic, effective_poly_rank
+
+
+def _initialize_dendritic_layer(
+    dendritic: nn.Module,
+    original_module: Union[nn.Linear, Any],  # Union with Any to handle Conv1D
+    is_conv1d: bool,
+    init_scale: float
+) -> None:
+    """Initialize dendritic layer weights with proper type handling."""
+    """Initialize dendritic layer weights based on original module."""
+    with torch.no_grad():
+        if hasattr(dendritic, "base_linear") and dendritic.__class__.__name__ == "DendriticStack":
+            # Handle weight source with proper typing
+            weight_tensor = cast(Tensor, original_module.weight)
+            src_weight = weight_tensor if not is_conv1d else weight_tensor.t().contiguous()
+            
+            # Copy original weights to base_linear (Identity Path)
+            base_linear = getattr(dendritic, "base_linear")
+            if hasattr(base_linear, "weight"):
+                base_linear.weight.copy_(src_weight)
+            
+            # Handle bias if exists
+            if hasattr(original_module, "bias") and original_module.bias is not None:
+                bias_tensor = cast(Tensor, original_module.bias)
+                if hasattr(base_linear, "bias") and base_linear.bias is not None:
+                    base_linear.bias.copy_(bias_tensor)
+            
+            # Zero out new branch (Stack Path)
+            if hasattr(dendritic, "layer2") and hasattr(dendritic.layer2, "linear"):
+                layer2_linear = getattr(dendritic.layer2, "linear")
+                if hasattr(layer2_linear, "weight"):
+                    layer2_linear.weight.zero_()
+                if hasattr(layer2_linear, "bias") and layer2_linear.bias is not None:
+                    layer2_linear.bias.zero_()
+                
+                # Zero out polynomial components
+                for layer_attr in ["layer1", "layer2"]:
+                    if hasattr(dendritic, layer_attr):
+                        layer = getattr(dendritic, layer_attr)
+                        if hasattr(layer, "scale"):
+                            layer.scale.fill_(0.0)
+                        if hasattr(layer, "diag_scale"):
+                            layer.diag_scale.fill_(0.0)
+        else:
+            # For standard DendriticLayer
+            if hasattr(dendritic, "linear") and hasattr(original_module, "weight"):
+                linear_layer = getattr(dendritic, "linear")
+                weight_tensor = cast(Tensor, original_module.weight)
+                src_weight = weight_tensor.t().contiguous() if is_conv1d else weight_tensor
+                
+                if hasattr(linear_layer, "weight"):
+                    linear_layer.weight.copy_(src_weight)
+                
+                # Handle bias if exists
+                if hasattr(original_module, "bias") and original_module.bias is not None:
+                    bias_tensor = cast(Tensor, original_module.bias)
+                    if hasattr(linear_layer, "bias") and linear_layer.bias is not None:
+                        linear_layer.bias.copy_(bias_tensor)
+            
+            # Initialize scaling parameters with proper type checking
+            for param_name in ["scale", "diag_scale"]:
+                if hasattr(dendritic, param_name):
+                    param = getattr(dendritic, param_name)
+                    if isinstance(param, Tensor):
+                        param.fill_(init_scale)
+
+
+def _freeze_linear_pathway(dendritic: nn.Module) -> None:
+    """Freeze the linear pathway of a dendritic layer with proper type checking."""
+    for component in ["linear", "base_linear"]:
+        if hasattr(dendritic, component):
+            linear = getattr(dendritic, component)
+            if hasattr(linear, "weight"):
+                linear.weight.requires_grad = False
+            if hasattr(linear, "bias") and linear.bias is not None:
+                linear.bias.requires_grad = False
+
+
+def _get_trainable_parameter_names() -> Set[str]:
+    """Return set of parameter names that should be trainable."""
+    return {
+        "w1", "w2", "w_", "scale", "diag", "poly_", "w_diag",
+        "interaction", "attention", "projection"
+    }
+
+
+def _is_parameter_trainable(param_name: str) -> bool:
+    """Check if a parameter should be trainable based on its name."""
+    trainable_patterns = _get_trainable_parameter_names()
+    return any(pattern in param_name for pattern in trainable_patterns)
+
+
+def _get_module_parent_and_name(model: nn.Module, full_name: str) -> Tuple[nn.Module, str]:
+    """Get parent module and child name from full module name."""
+    if "." in full_name:
+        parent_name = full_name.rsplit(".", 1)[0]
+        child_name = full_name.split(".")[-1]
+        parent = model.get_submodule(parent_name)
+    else:
+        # Direct child of root module
+        parent = model
+        child_name = full_name
+    return parent, child_name
+
+
+def _log_conversion_statistics(conversions: List[LayerConversionStats]) -> None:
+    """Log detailed statistics about the conversion process."""
+    if not conversions:
+        return
+
+    total_before = sum(c.linear_params for c in conversions)
+    total_after = sum(c.dendritic_params for c in conversions)
+    total_trainable = sum(c.trainable_params for c in conversions)
+
+    # Print trainable parameters
+    print("\nTrainable parameters after enhancement:")
+    for conv in conversions:
+        print(f"  {conv.name} | "
+              f"Params: {conv.dendritic_params:,} | "
+              f"Trainable: {conv.trainable_percentage:.1f}%")
+
+    # Print summary
+    print(f"\n{'='*70}")
+    print("Dendritic Enhancement Summary")
+    print(f"{'='*70}")
+    print(f"Converted {len(conversions)} layer(s)")
+    print(f"Parameters before:  {total_before:>12,}")
+    print(f"Parameters after:   {total_after:>12,}")
+    print(f"Added parameters:   {total_after - total_before:>12,} "
+          f"(+{(total_after/total_before-1)*100:.2f}%)")
+    print(f"Trainable params:   {total_trainable:>12,} "
+          f"({total_trainable/total_after*100:.2f}% of enhanced layers)")
 
 
 def enhance_model_with_dendritic(
     model: nn.Module,
     target_layers: Optional[List[str]] = None,
-    poly_rank: Union[int, str] = "auto",
+    poly_rank: Union[int, Literal["auto"]] = "auto",
     init_scale: float = 1e-6,
     freeze_linear: bool = True,
     verbose: bool = True,
-    dendritic_cls: Optional[type] = None,
-    dendritic_kwargs: Optional[dict] = None,
+    dendritic_cls: Optional[Type] = None,
+    dendritic_kwargs: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> nn.Module:
     """
     Enhance a pretrained model by replacing linear layers with dendritic versions.
 
-    This allows retrofitting ANY pretrained neural network with polynomial feature
-    interactions while maintaining exact initial behavior (identity initialization).
-
-    Handles both nn.Linear and transformers.pytorch_utils.Conv1D layers.
-
     Args:
         model: PyTorch model to enhance
-        target_layers: List of layer name patterns to replace (e.g., ['mlp.c_fc', 'attn.c_proj'])
-                      If None, replaces all linear/Conv1D layers
+        target_layers: List of layer name patterns to replace
         poly_rank: 'auto' for input_dim//16, or integer for fixed rank
-        init_scale: Initial scale for polynomial pathway (should be ~1e-6 for identity)
+        init_scale: Initial scale for polynomial pathway
         freeze_linear: Whether to freeze the pretrained linear weights
         verbose: Print conversion statistics
-        dendritic_cls: Class to use for replacement (default: DendriticLayer; can be DendriticStack)
-        dendritic_kwargs: Extra keyword arguments for dendritic_cls construction
+        dendritic_cls: Class to use for replacement
+        dendritic_kwargs: Extra keyword arguments for dendritic_cls
 
     Returns:
         Enhanced model with dendritic layers
 
-    Example:
-        >>> from transformers import GPT2LMHeadModel
-        >>> from dendritic.layer import DendriticLayer, DendriticStack
-        >>> model = GPT2LMHeadModel.from_pretrained('gpt2')
-        >>> model = enhance_model_with_dendritic(
-        ...     model,
-        ...     target_layers=['mlp.c_fc'],
-        ...     freeze_linear=True,
-        ...     dendritic_cls=DendriticStack,
-        ...     dendritic_kwargs={"bottleneck_dim": 128, "dropout": 0.1}
-        ... )
-        >>> # Model behavior is identical until you finetune
-        >>> # Only ~0.05% new parameters are trainable
+    Raises:
+        NoLayersConvertedError: If no layers were converted
+        ValueError: For invalid input parameters
     """
-    if poly_rank != "auto" and (not isinstance(poly_rank, int) or poly_rank <= 0):
-        raise ValueError("poly_rank must be 'auto' or a positive integer")
-
-    # Import default class if not provided
+    # Input validation
+    _validate_enhancement_params(model, poly_rank, target_layers)
+    
+    # Set default dendritic class if not provided
     if dendritic_cls is None:
         from .layers.DendriticLayer import DendriticLayer
-
         dendritic_cls = DendriticLayer
-    if dendritic_kwargs is None:
-        dendritic_kwargs = {}
+    
+    dendritic_kwargs = dendritic_kwargs or {}
+    conv1d_class = _get_conv1d_class()
+    device = next(model.parameters()).device
+    conversions: List[LayerConversionStats] = []
+    replacements: List[Tuple[nn.Module, str, nn.Module]] = []
+    dendritic_param_ids: Set[int] = set()
 
     # Freeze all parameters first
     for param in model.parameters():
         param.requires_grad = False
 
-    # Get device of model
-    device = next(model.parameters()).device
-
-    # Check if Conv1D exists (HuggingFace models)
-    try:
-        from transformers.pytorch_utils import Conv1D
-
-        has_conv1d = True
-    except ImportError:
-        Conv1D = None
-        has_conv1d = False
-
-    conversions = []
-    replacements = []  # Store (parent, child_name, new_module) tuples
-    dendritic_param_ids = set()
-
-    # First pass: identify what needs to be replaced
+    # First pass: identify and prepare layers for conversion
     for name, module in model.named_modules():
-        # Check if it's a Linear or Conv1D layer
-        is_linear = isinstance(module, nn.Linear)
-        is_conv1d = has_conv1d and isinstance(module, Conv1D)
+        if not _should_convert_layer(name, module, target_layers, conv1d_class):
+            continue
 
-        if is_linear or is_conv1d:
-            # Check if this layer should be converted
-            should_convert = False
-            if target_layers is None:
-                should_convert = True
-            else:
-                # Filter out non-string patterns
-                valid_patterns = [p for p in target_layers if isinstance(p, str)]
-                should_convert = any(pattern in name for pattern in valid_patterns)
+        is_conv1d = conv1d_class is not None and isinstance(module, conv1d_class)
+        
+        try:
+            # Create and initialize dendritic layer
+            dendritic, effective_poly_rank = _create_dendritic_layer(
+                module=module,
+                is_conv1d=is_conv1d,
+                poly_rank=poly_rank,
+                init_scale=init_scale,
+                device=device,
+                dendritic_cls=dendritic_cls,
+                dendritic_kwargs=dendritic_kwargs
+            )
 
-            if should_convert:
-                # Get input/output dimensions
-                if is_conv1d:
-                    # Conv1D stores weights as (out_features, in_features) - transposed!
-                    # But nf (num features) is output_dim, nx is input_dim
-                    input_dim = module.weight.shape[0]  # This is actually in_features
-                    output_dim = module.weight.shape[1]  # This is actually out_features
-                    has_bias = module.bias is not None
-                else:
-                    # nn.Linear: (out_features, in_features)
-                    input_dim = module.in_features
-                    output_dim = module.out_features
-                    has_bias = module.bias is not None
+            # Freeze linear pathway if requested
+            if freeze_linear:
+                _freeze_linear_pathway(dendritic)
 
-                # Calculate poly_rank
-                if poly_rank == "auto":
-                    pr = max(4, input_dim // 64)
-                else:
-                    pr = poly_rank
+            # Mark dendritic parameters as trainable
+            for param_name, param in dendritic.named_parameters():
+                if _is_parameter_trainable(param_name):
+                    param.requires_grad = True
+                    dendritic_param_ids.add(id(param))
 
-                # Build kwargs for construction
-                layer_kwargs = dict(
-                    input_dim=input_dim,
-                    output_dim=output_dim,
-                    poly_rank=pr,
-                    init_scale=init_scale,
-                    bias=has_bias,
-                )
-                layer_kwargs.update(dendritic_kwargs)
+            # Track conversion statistics
+            linear_params = sum(p.numel() for p in module.parameters())
+            dendritic_params = sum(p.numel() for p in dendritic.parameters())
+            trainable_params = sum(p.numel() for p in dendritic.parameters() if p.requires_grad)
 
-                # Create dendritic layer ON THE SAME DEVICE
-                dendritic = dendritic_cls(**layer_kwargs).to(device)
+            conversions.append(LayerConversionStats(
+                name=name,
+                linear_params=linear_params,
+                dendritic_params=dendritic_params,
+                trainable_params=trainable_params,
+                poly_rank=effective_poly_rank
+            ))
 
-                # Custom patching logic for DendriticStack
-                with torch.no_grad():
-                    if (
-                        hasattr(dendritic, "base_linear")
-                        and dendritic_cls.__name__ == "DendriticStack"
-                    ):
-                        src_weight = (
-                            module.weight
-                            if not is_conv1d
-                            else module.weight.t().contiguous()
-                        )
+            # Store replacement info with proper type handling
+            parent, child_name = _get_module_parent_and_name(model, name)
+            replacements.append((parent, child_name, dendritic))
 
-                        # 1. Copy original weights to base_linear (The Identity Path)
-                        dendritic.base_linear.weight.copy_(src_weight)
-                        if has_bias and dendritic.base_linear.bias is not None:
-                            dendritic.base_linear.bias.copy_(module.bias)
+        except Exception as e:
+            logger.error(f"Error converting layer {name}: {str(e)}")
+            if verbose:
+                print(f"Warning: Failed to convert layer {name}: {str(e)}")
+            continue
 
-                        # 2. ZERO OUT the new branch (The Stack Path)
-                        if hasattr(dendritic.layer2, "linear"):
-                            dendritic.layer2.linear.weight.zero_()
-                            if dendritic.layer2.linear.bias is not None:
-                                dendritic.layer2.linear.bias.zero_()
+    if not replacements:
+        raise NoLayersConvertedError(
+            "No layers were converted. Check target_layers patterns and layer types."
+        )
 
-                            # Zero out polynomial components
-                            dendritic.layer1.scale.fill_(0.0)
-                            dendritic.layer2.scale.fill_(0.0)
-                            if hasattr(dendritic.layer1, "diag_scale"):
-                                dendritic.layer1.diag_scale.fill_(0.0)
-                            if hasattr(dendritic.layer2, "diag_scale"):
-                                dendritic.layer2.diag_scale.fill_(0.0)
+    # Second pass: actually replace modules
+    for parent, child_name, new_module in replacements:
+        setattr(parent, child_name, new_module)
 
-                    else:
-                        # For DendriticLayer
-                        if hasattr(dendritic, "linear") and hasattr(module, "weight"):
-                            if is_conv1d:
-                                # For Conv1D layers, transpose weight to match Linear format
-                                src_weight = module.weight.t().contiguous()
-                            else:
-                                src_weight = module.weight
+    # Log conversion statistics
+    if verbose:
+        _log_conversion_statistics(conversions)
 
-                            # Copy original weights to linear pathway
-                            dendritic.linear.weight.copy_(src_weight)
-                            if has_bias:
-                                dendritic.linear.bias.copy_(module.bias)
-                        if hasattr(dendritic, "scale"):
-                            dendritic.scale.fill_(init_scale)
-                        if hasattr(dendritic, "diag_scale"):
-                            dendritic.diag_scale.fill_(init_scale)
+    # Attach configuration to model with proper type handling
+    config = {
+        "target_layers": target_layers,
+        "poly_rank": poly_rank,
+        "init_scale": init_scale,
+        "freeze_linear": freeze_linear,
+        "verbose": verbose,
+        "dendritic_cls": dendritic_cls,
+        "dendritic_kwargs": dendritic_kwargs,
+        **kwargs,
+    }
+    # Use setattr to avoid mypy issues with dynamic attributes
+    setattr(model, "dendritic_config", config)
 
-                # Freeze linear pathway
-                if freeze_linear:
-                    if hasattr(dendritic, "linear"):
-                        dendritic.linear.weight.requires_grad = False
-                        if dendritic.linear.bias is not None:
-                            dendritic.linear.bias.requires_grad = False
-
-                    if hasattr(dendritic, "base_linear"):
-                        dendritic.base_linear.weight.requires_grad = False
-                        if dendritic.base_linear.bias is not None:
-                            dendritic.base_linear.bias.requires_grad = False
-
-                # Collect dendritic parameters
-                for n, p in dendritic.named_parameters():
-                    # Mark all dendritic pathway parameters as trainable
-                    if (
-                        n.startswith("w1")
-                        or n.startswith("w2")
-                        or n.startswith("w_")
-                        or n.startswith("scale")
-                        or n.startswith("diag")
-                        or n.startswith("poly_")
-                        or n.startswith("w_diag")  # Include diagonal pathway weights
-                    ):
-                        p.requires_grad = True
-                        dendritic_param_ids.add(id(p))
-
-                # Track statistics
-                linear_params = sum(p.numel() for p in module.parameters())
-                dendritic_params = sum(p.numel() for p in dendritic.parameters())
-                trainable_params = sum(
-                    p.numel() for p in dendritic.parameters() if p.requires_grad
-                )
-
-                conversions.append(
-                    {
-                        "name": name,
-                        "linear_params": linear_params,
-                        "dendritic_params": dendritic_params,
-                        "added_params": dendritic_params - linear_params,
-                        "trainable_params": trainable_params,
-                        "poly_rank": pr,
-                    }
-                )
-
-                # Store replacement info
-                if "." in name:
-                    parent_name = name.rsplit(".", 1)[0]
-                    child_name = name.split(".")[-1]
-                    parent = model.get_submodule(parent_name)
-                else:
-                    # Direct child of root module
-                    parent = model
-                    child_name = name
-
-                replacements.append((parent, child_name, dendritic))
+    return model
     if not replacements:
         raise TypeError(
             "Warning: No layers were converted. Check target_layers patterns."
@@ -316,55 +496,66 @@ def verify_identity_initialization(model_original, model_enhanced, test_input):
     return diff
 
 
-def get_polynomial_stats(model):
+def get_polynomial_stats(model: nn.Module) -> Dict[str, Dict[str, Any]]:
     """
     Get statistics about polynomial pathways in the model.
 
-    Returns dict with scale values for each dendritic layer.
+    Returns:
+        Dictionary with scale values and other statistics for each dendritic layer.
     """
     from .layers.DendriticStack import DendriticStack
 
-    stats = {}
+    stats: Dict[str, Dict[str, Any]] = {}
+    
     for name, module in model.named_modules():
-        if isinstance(module, (DendriticLayer, DendriticStack)):
-            with torch.no_grad():
-                scale = getattr(module, "scale", 0.0)
-                # Only call .item() if scale is a tensor
-                if isinstance(scale, torch.Tensor):
-                    scale = scale.item()
+        if not isinstance(module, (DendriticLayer, DendriticStack)):
+            continue
 
-                # Handle DendriticStack layers
-                if hasattr(module, "layer1") and hasattr(module.layer1, "scale"):
-                    layer1_scale = module.layer1.scale
-                    if isinstance(layer1_scale, torch.Tensor):
-                        layer1_scale = layer1_scale.item()
-                    scale = (scale + layer1_scale) / 2
-                if hasattr(module, "layer2") and hasattr(module.layer2, "scale"):
-                    layer2_scale = module.layer2.scale
-                    if isinstance(layer2_scale, torch.Tensor):
-                        layer2_scale = layer2_scale.item()
-                    scale = (scale + layer2_scale) / 2
+        with torch.no_grad():
+            # Initialize scale with default value
+            scale: float = 0.0
+            
+            # Get scale from module if it exists
+            if hasattr(module, "scale"):
+                scale_attr = getattr(module, "scale")
+                if isinstance(scale_attr, (int, float)):
+                    scale = float(scale_attr)
+                elif isinstance(scale_attr, torch.Tensor):
+                    scale = scale_attr.item() if scale_attr.numel() == 1 else 0.0
 
-                # Effective rank calculation
+            # Handle DendriticStack layers
+            if hasattr(module, "layer1") and hasattr(module.layer1, "scale"):
+                layer1_scale = getattr(module.layer1, "scale", 0.0)
+                if isinstance(layer1_scale, torch.Tensor) and layer1_scale.numel() == 1:
+                    scale = (scale + layer1_scale.item()) / 2
+                elif isinstance(layer1_scale, (int, float)):
+                    scale = (scale + float(layer1_scale)) / 2
+
+            if hasattr(module, "layer2") and hasattr(module.layer2, "scale"):
+                layer2_scale = getattr(module.layer2, "scale", 0.0)
+                if isinstance(layer2_scale, torch.Tensor) and layer2_scale.numel() == 1:
+                    scale = (scale + layer2_scale.item()) / 2
+                elif isinstance(layer2_scale, (int, float)):
+                    scale = (scale + float(layer2_scale)) / 2
+
+            # Effective rank calculation
+            eff_rank = None
+            if hasattr(module, "w1"):
                 try:
-                    if hasattr(module, "w1"):
-                        _, S, _ = torch.svd(module.w1)
+                    w1 = getattr(module, "w1")
+                    if isinstance(w1, torch.Tensor):
+                        _, S, _ = torch.svd(w1)
                         eff_rank = (S.sum() ** 2) / (S**2).sum()
-                        eff_rank = (
-                            eff_rank.item()
-                            if isinstance(eff_rank, torch.Tensor)
-                            else eff_rank
-                        )
-                    else:
-                        eff_rank = None
-                except:
-                    eff_rank = None
+                        if isinstance(eff_rank, torch.Tensor):
+                            eff_rank = eff_rank.item()
+                except Exception as e:
+                    logger.warning(f"Failed to calculate effective rank for {name}: {str(e)}")
 
-                stats[name] = {
-                    "scale": abs(scale),
-                    "eff_rank": eff_rank,
-                    "poly_rank": getattr(module, "poly_rank", "N/A"),
-                }
+            stats[name] = {
+                "scale": abs(scale),
+                "eff_rank": eff_rank,
+                "poly_rank": getattr(module, "poly_rank", "N/A"),
+            }
 
     return stats
 
@@ -468,7 +659,7 @@ if __name__ == "__main__":
             self.fc2 = nn.Linear(256, 128)
             self.fc3 = nn.Linear(128, 10)
 
-        def forward(self, x):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
             x = torch.relu(self.fc1(x))
             x = torch.relu(self.fc2(x))
             return self.fc3(x)
@@ -481,20 +672,13 @@ if __name__ == "__main__":
 
     # Extract and save dendritic state
     state = extract_dendritic_state(enhanced)
-    print(f"Extracted state with {state['_metadata']['num_params']} parameters")
-    print(
-        "Parameter keys:", [k for k in state.keys() if not k.startswith("_")][:5], "..."
-    )
+    print(f"Extracted state with dendritic parameters")
+    print("Parameter keys:", list(state["state_dict"].keys())[:5], "...")
 
     # Create new enhanced model with saved state
-    new_enhanced = create_dendritic_state(
+    new_enhanced = apply_dendritic_state(
         model,
-        state_dict=state,
-        enhancement_params={
-            "target_layers": ["fc1"],
-            "poly_rank": 16,
-            "freeze_linear": True,
-        },
+        state
     )
 
     # Verify same outputs

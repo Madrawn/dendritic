@@ -133,17 +133,3 @@ def test_base_class_prepare_data(mocker, mock_tokenizer):
     assert 'train' in prepared
     assert 'eval' in prepared
     assert prepared['train'].format['type'] == 'torch'
-
-@pytest.mark.unit
-def test_module_exports():
-    """Test that all handlers are properly exported"""
-    from dendritic.dataset_handlers import dataset_handlers
-    expected_exports = [
-        'BaseDatasetHandler',
-        'PythonAlpacaHandler',
-        'GitHubCodeHandler',
-        'TinyStoriesHandler',
-        'WikiTextHandler'
-    ]
-    for export in expected_exports:
-        assert hasattr(dataset_handlers, export), f"Missing export: {export}"

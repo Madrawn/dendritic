@@ -8,6 +8,7 @@ from dendritic import enhancement
 from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
 from dendritic.layers.DendriticLayer import DendriticLayer
 from dendritic.enhancement import (
+    NoLayersConvertedError,
     apply_dendritic_state,
     enhance_model_with_dendritic
 )
@@ -36,7 +37,7 @@ def test_invalid_layer_replacement(invalid_layer):
             poly_rank=8,
             freeze_linear=True
         )
-    assert "Warning: No layers were converted. Check target_layers patterns." in str(excinfo.value)
+    assert "All target_layers patterns must be strings" in str(excinfo.value)
 
 # =====================
 # Data Handling Errors
@@ -81,7 +82,7 @@ def test_invalid_enhancement_parameters(invalid_config):
     """Test invalid parameters for model enhancement"""
     model = GPT2LMHeadModel.from_pretrained("gpt2")
     
-    with pytest.raises((ValueError, TypeError)) as excinfo:
+    with pytest.raises(NoLayersConvertedError) as excinfo:
         enhance_model_with_dendritic(model, **invalid_config)
 
 

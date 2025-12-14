@@ -2,6 +2,7 @@ import pytest
 import torch
 import torch.nn as nn
 from dendritic.enhancement import (
+    NoLayersConvertedError,
     apply_dendritic_state,
     enhance_model_with_dendritic,
     verify_identity_initialization,
@@ -202,14 +203,14 @@ def test_gradient_flow(simple_mlp):
 def test_invalid_model_architecture():
     """Test invalid model architectures"""
     invalid_model = nn.Sequential(nn.Conv2d(3, 16, 3), nn.ReLU())
-    with pytest.raises(TypeError):
+    with pytest.raises(NoLayersConvertedError):
         enhance_model_with_dendritic(invalid_model)
 
 @pytest.mark.unit
 def test_unsupported_layer_type():
     """Test unsupported layer types"""
     model = nn.Sequential(nn.Linear(64, 128), nn.Conv2d(128, 256, 3))
-    with pytest.raises(TypeError):
+    with pytest.raises(NoLayersConvertedError):
         enhance_model_with_dendritic(model, target_layers=["1"])
 
 @pytest.mark.unit
