@@ -58,7 +58,7 @@ print(f"\nDevice: {device}")
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 tokenizer.pad_token = tokenizer.eos_token
 
-from dendritic.dataset_handlers import PythonAlpacaHandler
+from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
 
 # 2. Load and tokenize dataset using modular handler
 print("\nLoading and tokenizing dataset with PythonAlpacaHandler...")

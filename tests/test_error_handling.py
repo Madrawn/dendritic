@@ -3,8 +3,9 @@ import torch
 import os
 import json
 from unittest.mock import patch, MagicMock
+from dendritic.dataset_handlers.BaseDatasetHandler import BaseDatasetHandler
 from dendritic import enhancement
-from dendritic.dataset_handlers import PythonAlpacaHandler, BaseDatasetHandler
+from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
 from dendritic.layers.DendriticLayer import DendriticLayer
 from dendritic.enhancement import (
     apply_dendritic_state,

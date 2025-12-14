@@ -1,7 +1,7 @@
 import pytest
-from dendritic.dataset_handlers import (
-    BaseDatasetHandler,
-    PythonAlpacaHandler,
+from dendritic.dataset_handlers.BaseDatasetHandler import BaseDatasetHandler
+from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
+from dendritic.dataset_handlers.dataset_handlers import (
     GitHubCodeHandler,
     TinyStoriesHandler,
     WikiTextHandler
@@ -137,7 +137,7 @@ def test_base_class_prepare_data(mocker, mock_tokenizer):
 @pytest.mark.unit
 def test_module_exports():
     """Test that all handlers are properly exported"""
-    from dendritic import dataset_handlers
+    from dendritic.dataset_handlers import dataset_handlers
     expected_exports = [
         'BaseDatasetHandler',
         'PythonAlpacaHandler',

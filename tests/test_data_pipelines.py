@@ -1,7 +1,8 @@
 import pytest
 import torch
 import numpy as np
-from dendritic.dataset_handlers import PythonAlpacaHandler, BaseDatasetHandler
+from dendritic.dataset_handlers.BaseDatasetHandler import BaseDatasetHandler
+from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
 from dendritic.enhancement import enhance_model_with_dendritic
 from dendritic.layers.DendriticLayer import DendriticLayer
 from transformers.tokenization_utils import PreTrainedTokenizer

@@ -7,7 +7,7 @@ from transformers.models.gpt2 import GPT2LMHeadModel, GPT2Tokenizer
 from transformers.models.bert import BertForMaskedLM, BertTokenizer
 from transformers.models.roberta import RobertaForMaskedLM, RobertaTokenizer
 from dendritic.enhancement import enhance_model_with_dendritic, get_polynomial_stats, load_dendritic_model, save_dendritic_model
-from dendritic.dataset_handlers import PythonAlpacaHandler
+from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
 from dendritic.layers.DendriticLayer import DendriticLayer
 from dendritic.layers.DendriticStack import DendriticStack
 from torch.utils.data import DataLoader
