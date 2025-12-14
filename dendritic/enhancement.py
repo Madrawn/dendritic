@@ -6,6 +6,7 @@ from typing import Literal, Optional, List, Union, Dict, Any, Tuple, Set, Type, 
 import torch
 from torch import Tensor
 from dataclasses import dataclass
+from transformers.modeling_utils import PreTrainedModel
 
 from .layers.DendriticLayer import DendriticLayer
 
@@ -55,8 +56,8 @@ def _validate_enhancement_params(
     target_layers: Optional[List[str]]
 ) -> None:
     """Validate enhancement parameters."""
-    if not isinstance(model, nn.Module):
-        raise TypeError("model must be a PyTorch nn.Module")
+    if not isinstance(model, PreTrainedModel):
+        raise TypeError("model must be a PyTorch PreTrainedModel")
     
     if poly_rank != "auto" and (not isinstance(poly_rank, int) or poly_rank <= 0):
         raise ValueError("poly_rank must be 'auto' or a positive integer")
@@ -149,7 +150,8 @@ def _create_dendritic_layer(
     }
 
     # Create and initialize dendritic layer
-    dendritic = dendritic_cls(**layer_kwargs).to(device)
+    dendritic = dendritic_cls(**layer_kwargs)
+    cast(torch.nn.Module, dendritic).to(device)
     _initialize_dendritic_layer(dendritic, module, is_conv1d, init_scale)
     
     return dendritic, effective_poly_rank
@@ -417,52 +419,6 @@ def enhance_model_with_dendritic(
     setattr(model, "dendritic_config", config)
 
     return model
-    if not replacements:
-        raise TypeError(
-            "Warning: No layers were converted. Check target_layers patterns."
-        )
-    # Second pass: actually replace modules
-    for parent, child_name, new_module in replacements:
-        setattr(parent, child_name, new_module)
-
-    # Print trainable parameter names for verification
-    if verbose:
-        print("\nTrainable parameters after enhancement:")
-        for n, p in model.named_parameters():
-            if p.requires_grad:
-                print(f"  {n} | shape={tuple(p.shape)}")
-
-        if conversions:
-            total_params_before = sum(c["linear_params"] for c in conversions)
-            total_params_after = sum(c["dendritic_params"] for c in conversions)
-            total_trainable = sum(c["trainable_params"] for c in conversions)
-
-            print(f"\n{'='*70}")
-            print("Dendritic Enhancement Summary")
-            print(f"{'='*70}")
-            print(f"Converted {len(conversions)} layer(s)")
-            print(f"Parameters before:  {total_params_before:>12,}")
-            print(f"Parameters after:   {total_params_after:>12,}")
-            print(
-                f"Added parameters:   {total_params_after - total_params_before:>12,} "
-                f"(+{(total_params_after/total_params_before-1)*100:.2f}%)"
-            )
-            print(
-                f"\nTrainable params:   {total_trainable:>12,} "
-                f"({100*total_trainable/total_params_after:.2f}% of enhanced layers)"
-            )
-    model.dendritic_config = {  # type: ignore
-        "target_layers": target_layers,
-        "poly_rank": poly_rank,
-        "init_scale": init_scale,
-        "freeze_linear": freeze_linear,
-        "verbose": verbose,
-        "dendritic_cls": dendritic_cls,
-        "dendritic_kwargs": dendritic_kwargs,
-        **kwargs,
-    }
-    return model
-
 
 def verify_identity_initialization(model_original, model_enhanced, test_input):
     """
@@ -493,7 +449,7 @@ def verify_identity_initialization(model_original, model_enhanced, test_input):
     return diff
 
 
-def get_polynomial_stats(model: nn.Module) -> Dict[str, Dict[str, Any]]:
+def get_polynomial_stats(model: torch.nn.Module) -> Dict[str, Dict[str, Any]]:
     """
     Get statistics about polynomial pathways in the model.
 

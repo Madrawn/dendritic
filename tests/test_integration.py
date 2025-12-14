@@ -128,7 +128,7 @@ def test_model_enhancement_workflow(request, model_fixture, model_name, small_da
 def test_custom_model_enhancement(small_dataset):
     """Test enhancement with a custom model"""
 
-    class CustomModel(torch.nn.Module):
+    class CustomModel(torch.nn.Model):
         def __init__(self):
             super().__init__()
             self.linear1 = torch.nn.Linear(128, 256)

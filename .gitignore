@@ -5,3 +5,6 @@ results/
 data_cache/
 .coverage
 .vscode
+*.log
+test_model_state.json
+test_model_state.pt

@@ -1,5 +1,4 @@
 from typing import Optional
-from pygame import init
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
