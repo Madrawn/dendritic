@@ -82,3 +82,12 @@ class DendriticStack(nn.Module):
             return self.base_linear(x) + stack_out
 
         return stack_out
+    
+
+try:
+    from torch.serialization import add_safe_globals
+    from .DendriticStack import DendriticStack # Adjust import path as needed
+    add_safe_globals([DendriticStack])
+except ImportError:
+    # Fallback for older PyTorch versions that don't have add_safe_globals
+    pass

@@ -1,9 +1,9 @@
 from typing import Optional
+from pygame import init
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from gguf import Literal
-
 
 class DendriticLayer(nn.Module):
     """
@@ -58,6 +58,8 @@ class DendriticLayer(nn.Module):
         *args,
         **kwargs
     ):
+        if init_scale == 0.0:
+            raise ValueError("init_scale must be non-zero to enable polynomial pathway.")
         super().__init__()
 
         self.input_dim = input_dim
@@ -126,3 +128,12 @@ class DendriticLayer(nn.Module):
             f'{self.input_dim}, {self.output_dim}, '
             f'poly_rank={self.poly_rank}, diag_rank={self.diag_rank}'
         )
+    
+
+try:
+    from torch.serialization import add_safe_globals
+    from .DendriticLayer import DendriticLayer # Adjust import path as needed
+    add_safe_globals([DendriticLayer])
+except ImportError:
+    # Fallback for older PyTorch versions that don't have add_safe_globals
+    pass

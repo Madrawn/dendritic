@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from dendritic.dataset_handlers import PythonAlpacaHandler, BaseDatasetHandler
 from dendritic.enhancement import enhance_model_with_dendritic
-from layers.DendriticLayer import DendriticLayer
+from dendritic.layers.DendriticLayer import DendriticLayer
 from transformers.tokenization_utils import PreTrainedTokenizer
 from datasets import Dataset
 from typing import Dict, Any
@@ -13,6 +13,14 @@ import json
 import csv
 import tempfile
 
+class MockBatchEncoding(dict):
+    """A helper to allow accessing dict keys as attributes."""
+    def __getattr__(self, attr):
+        try:
+            return self[attr]
+        except KeyError:
+            raise AttributeError(f"'MockBatchEncoding' has no attribute '{attr}'")
+        
 # Mock tokenizer for testing
 class MockTokenizer:
     def __init__(self):
@@ -22,10 +30,10 @@ class MockTokenizer:
         self.eos_token_id = 1
         self.vocab_size = 10000
 
-    def __call__(self, texts, truncation=False, padding=False, max_length=None, return_tensors=None):
+    def __call__(self, texts, truncation=False, padding=False, max_length=None, return_tensors=None, *args, **kwargs):
         # Simple tokenization: split by space
         # Return as a dictionary with 'input_ids' as list of lists
-        return {'input_ids': [[len(word) for word in text.split()] for text in texts]}
+        return MockBatchEncoding({'input_ids': [[len(word) for word in text.split()] for text in texts]})
 
 @pytest.fixture
 def mock_tokenizer():

@@ -27,9 +27,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 
-from layers.DendriticLayer import DendriticLayer
-from layers.DendriticMLP import DendriticMLP
-from layers.DendriticStack import DendriticStack
+from dendritic.layers.DendriticLayer import DendriticLayer
+from dendritic.layers.DendriticMLP import DendriticMLP
+from dendritic.layers.DendriticStack import DendriticStack
 
 
 

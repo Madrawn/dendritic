@@ -1,3 +1,4 @@
+import os
 import re
 import torch
 import torch.nn as nn
@@ -16,6 +17,7 @@ def enhance_model_with_dendritic(
     verbose: bool = True,
     dendritic_cls: Optional[type] = None,
     dendritic_kwargs: Optional[dict] = None,
+    **kwargs,
 ) -> nn.Module:
     """
     Enhance a pretrained model by replacing linear layers with dendritic versions.
@@ -92,9 +94,13 @@ def enhance_model_with_dendritic(
 
         if is_linear or is_conv1d:
             # Check if this layer should be converted
-            should_convert = target_layers is None or any(
-                pattern in name for pattern in target_layers
-            )
+            should_convert = False
+            if target_layers is None:
+                should_convert = True
+            else:
+                # Filter out non-string patterns
+                valid_patterns = [p for p in target_layers if isinstance(p, str)]
+                should_convert = any(pattern in name for pattern in valid_patterns)
 
             if should_convert:
                 # Get input/output dimensions
@@ -168,22 +174,12 @@ def enhance_model_with_dendritic(
                                 src_weight = module.weight.t().contiguous()
                             else:
                                 src_weight = module.weight
-                                
+
                             # Copy original weights to linear pathway
                             dendritic.linear.weight.copy_(src_weight)
                             if has_bias:
                                 dendritic.linear.bias.copy_(module.bias)
-                            
-                            # Initialize polynomial pathway with random weights
-                            # since we can't directly use original weights
-                            nn.init.xavier_uniform_(dendritic.w1)
-                            nn.init.xavier_uniform_(dendritic.w2)
-                            
-                            # Initialize polynomial output layer with small random values
-                            with torch.no_grad():
-                                nn.init.normal_(dendritic.poly_out, std=0.01)
-                            
-                            # Set scale to preserve original output
+                        if hasattr(dendritic, "scale"):
                             dendritic.scale.fill_(init_scale)
                         if hasattr(dendritic, "diag_scale"):
                             dendritic.diag_scale.fill_(init_scale)
@@ -245,7 +241,9 @@ def enhance_model_with_dendritic(
 
                 replacements.append((parent, child_name, dendritic))
     if not replacements:
-        raise TypeError("Warning: No layers were converted. Check target_layers patterns.")
+        raise TypeError(
+            "Warning: No layers were converted. Check target_layers patterns."
+        )
     # Second pass: actually replace modules
     for parent, child_name, new_module in replacements:
         setattr(parent, child_name, new_module)
@@ -276,7 +274,16 @@ def enhance_model_with_dendritic(
                 f"\nTrainable params:   {total_trainable:>12,} "
                 f"({100*total_trainable/total_params_after:.2f}% of enhanced layers)"
             )
-
+    model.dendritic_config = {  # type: ignore
+        "target_layers": target_layers,
+        "poly_rank": poly_rank,
+        "init_scale": init_scale,
+        "freeze_linear": freeze_linear,
+        "verbose": verbose,
+        "dendritic_cls": dendritic_cls,
+        "dendritic_kwargs": dendritic_kwargs,
+        **kwargs,
+    }
     return model
 
 
@@ -364,133 +371,89 @@ def get_polynomial_stats(model):
 
 def extract_dendritic_state(model: nn.Module) -> Dict[str, Any]:
     """
-    Extract only the trainable dendritic parameters from an enhanced model.
-
-    This creates a much smaller state dict than saving the entire model,
-    containing only the actual trained parameters (polynomial pathways etc.)
-    while excluding the original frozen weights.
-
-    Args:
-        model: Enhanced model with dendritic layers
-
-    Returns:
-        Dictionary containing:
-        - Trainable dendritic parameters
-        - Metadata with version, timestamp, and parameter count
-
-    Example:
-        >>> enhanced = enhance_model_with_dendritic(model, target_layers=['mlp.c_fc'])
-        >>> dendritic_state = extract_dendritic_state(enhanced)
-        >>> torch.save(dendritic_state, 'dendritic_weights.pt')
+    Extracts trainable parameters AND the configuration required to reconstruct
+    the dendritic layers.
+    
+    Returns a dictionary payload containing:
+    - 'dendritic_config': The args needed to re-enhance the base model.
+    - 'state_dict': The specific weights for the dendritic layers.
     """
-    state: Dict[str, Any] = {
+    if not hasattr(model, "dendritic_config"):
+        raise AttributeError(
+            "Model is missing 'dendritic_config'. "
+            "Ensure the model was enhanced using 'enhance_model_with_dendritic'."
+        )
+
+    # 1. Identify keys that are currently trainable (the dendritic weights)
+    # We use a set for O(1) lookups during the state_dict filter
+    trainable_keys = {name for name, param in model.named_parameters() if param.requires_grad}
+
+    # 2. Get the full standard state_dict (handles buffers and canonical naming automatically)
+    full_state = model.state_dict()
+
+    # 3. Filter: Keep only the trainable keys
+    # Note: If your dendritic layers have buffers (non-trainable state), 
+    # you might want to modify this logic to include those too.
+    dendritic_weights = {k: v.cpu().clone() for k, v in full_state.items() if k in trainable_keys}
+
+    return {
+        "dendritic_config": model.dendritic_config,
+        "state_dict": dendritic_weights,
         "_metadata": {
-            "version": "1.0",
-            "timestamp": datetime.datetime.now().isoformat(),
-            "description": "Extracted dendritic state (trainable parameters only)",
+            "version": "2.0",
+            "type": "dendritic_bundle"
         }
     }
 
-    # Track parameters
-    num_params = 0
 
-    # Extract parameters from all modules using full module paths
-    for module_name, module in model.named_modules():
-        # Handle DendriticLayers and custom components
-        for param_name, param in module.named_parameters(recurse=False):
-            if param.requires_grad:
-                full_key = f"{module_name}.{param_name}"
-                state[full_key] = param.data.cpu().clone()
-                num_params += 1
-
-    # Update metadata
-    state["_metadata"]["num_params"] = num_params
-
-    return state
-
-
-def load_dendritic_state(model: nn.Module, state_dict: Dict[str, Any]) -> nn.Module:
+def apply_dendritic_state(base_model: nn.Module, state_payload: Dict[str, Any]) -> nn.Module:
     """
-    Load dendritic state dict into an already enhanced model.
-
-    Args:
-        model: Enhanced model (must be compatible with the state_dict)
-        state_dict: State dictionary from extract_dendritic_state()
-
-    Returns:
-        Model with loaded dendritic state
-
-    Note:
-        Model must have the same architecture as the one used to create the state_dict.
-        Only parameters that exist in the model and are trainable will be updated.
-
-    Example:
-        >>> enhanced = enhance_model_with_dendritic(model, target_layers=['mlp.c_fc'])
-        >>> dendritic_state = torch.load('dendritic_weights.pt')
-        >>> enhanced = load_dendritic_state(enhanced, dendritic_state)
+    Takes a clean BASE model and a dendritic state payload.
+    1. Reads the config from the payload.
+    2. Enhances the base model (architecture change).
+    3. Loads the weights.
+    
+    Returns the Enhanced Model.
     """
-    # Remove metadata for loading
-    state_dict = {k: v for k, v in state_dict.items() if not k.startswith("_")}
+    config = state_payload.get("dendritic_config")
+    weights = state_payload.get("state_dict")
 
-    # Load parameters
-    model_state = model.state_dict()
-    for name, param in state_dict.items():
-        if name in model_state:
-            if model_state[name].shape == param.shape:
-                model_state[name].copy_(param)
-            else:
-                print(
-                    f"Warning: Shape mismatch for {name} "
-                    f"(expected {model_state[name].shape}, got {param.shape})"
-                )
+    if not config or weights is None:
+        raise ValueError("Invalid dendritic state payload: missing config or weights.")
 
-    model.load_state_dict(model_state, strict=False)
-    return model
+    # 1. Enhance the model (Modify Architecture)
+    # We assume 'enhance_model_with_dendritic' is available in your scope
+    enhanced_model = enhance_model_with_dendritic(base_model, **config)
 
+    # 2. Load the weights
+    # strict=False allows the base model weights (which are missing from the payload)
+    # to remain as they are (initialized/frozen).
+    missing, unexpected = enhanced_model.load_state_dict(weights, strict=False)
 
-def create_dendritic_state(
-    base_model: nn.Module,
-    state_dict: Optional[Dict[str, Any]] = None,
-    enhancement_params: Optional[Dict] = None,
-) -> nn.Module:
-    """
-    Create or recreate an enhanced model with optional stored state.
-
-    This is a helper function that combines model enhancement with state loading.
-    It ensures the model is properly enhanced before loading any saved state.
-
-    Args:
-        base_model: Base pre-trained model to enhance
-        state_dict: Optional state from extract_dendritic_state()
-        enhancement_params: Parameters for enhance_model_with_dendritic
-
-    Returns:
-        Enhanced model with loaded state (if provided)
-
-    Example:
-        >>> base_model = GPT2LMHeadModel.from_pretrained('gpt2')
-        >>> dendritic_state = torch.load('dendritic_weights.pt')
-        >>> enhanced = create_dendritic_state(
-        ...     base_model,
-        ...     state_dict=dendritic_state,
-        ...     enhancement_params={
-        ...         'target_layers': ['mlp.c_fc'],
-        ...         'poly_rank': 32,
-        ...         'freeze_linear': True
-        ...     }
-        ... )
-    """
-    if enhancement_params is None:
-        enhancement_params = {}
-
-    # Create enhanced model
-    enhanced_model = enhance_model_with_dendritic(base_model, **enhancement_params)
-
-    # Load state if provided
-    if state_dict is not None:
-        enhanced_model = load_dendritic_state(enhanced_model, state_dict)
-
+    # 3. Validation
+    # We expect missing keys (the frozen base weights). 
+    # We DO NOT expect unexpected keys (weights in file that don't match config).
+    if unexpected:
+        print(f"WARNING: {len(unexpected)} unexpected keys found while loading dendritic state.")
+    
     return enhanced_model
+
+
+def save_dendritic_model(model: nn.Module, filepath: str) -> None:
+    """Wrapper to save the extracted state to disk."""
+    payload = extract_dendritic_state(model)
+    
+    os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
+    torch.save(payload, filepath)
+
+
+def load_dendritic_model(base_model: nn.Module, filepath: str) -> nn.Module:
+    """Wrapper to load from disk and apply to a base model."""
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"No model file found at {filepath}")
+        
+    payload = torch.load(filepath, map_location="cpu")
+    return apply_dendritic_state(base_model, payload)
 
 
 # Example usage
