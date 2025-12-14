@@ -13,9 +13,47 @@ class BaseDatasetHandler(ABC):
         self.max_length = max_length
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    @abstractmethod
     def load_data(self, **kwargs) -> Dict[str, Any]:
-        """Load and return the dataset splits."""
+        """Load and return the dataset splits.
+        If 'data_files' is provided, load from specified file(s).
+        Otherwise, call the abstract method `load_default_data`.
+        """
+        if 'data_files' in kwargs:
+            # Extract data_files and remove from kwargs to avoid duplication
+            data_files = kwargs.pop('data_files')
+            return self.load_from_file(data_files, **kwargs)
+        else:
+            return self.load_default_data(**kwargs)
+
+    def load_from_file(self, data_files, **kwargs) -> Dict[str, Any]:
+        """Load dataset from file(s)."""
+        from datasets import load_dataset
+        import os
+        
+        # Determine file format based on extension
+        if isinstance(data_files, str):
+            ext = os.path.splitext(data_files)[1].lower()
+        elif isinstance(data_files, (list, tuple)) and data_files:
+            ext = os.path.splitext(data_files[0])[1].lower()
+        else:
+            ext = '.json'  # default to JSON
+        
+        if ext == '.csv':
+            dataset = load_dataset('csv', data_files=data_files)
+        elif ext == '.txt':
+            dataset = load_dataset('text', data_files=data_files)
+        else:
+            dataset = load_dataset('json', data_files=data_files)
+        
+        # Return the dataset without splitting
+        return {
+            'train': dataset['train'],
+            'test': Dataset.from_dict({})  # empty test set
+        }
+
+    @abstractmethod
+    def load_default_data(self, **kwargs) -> Dict[str, Any]:
+        """Load the default dataset when no data_files are provided."""
         pass
 
     @abstractmethod
@@ -35,16 +73,21 @@ class BaseDatasetHandler(ABC):
             remove_columns=ds['train'].column_names
         )
         
-        eval_dataset = ds['test'].map(
-            self.tokenize_function,
-            batched=True,
-            batch_size=100,
-            remove_columns=ds['test'].column_names
-        )
+        # If test set exists, tokenize it
+        if len(ds['test']) > 0:
+            eval_dataset = ds['test'].map(
+                self.tokenize_function,
+                batched=True,
+                batch_size=100,
+                remove_columns=ds['test'].column_names
+            )
+        else:
+            eval_dataset = Dataset.from_dict({})
         
         # Set format for PyTorch
         train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
-        eval_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+        if len(eval_dataset) > 0:
+            eval_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
         
         return {
             'train': train_dataset,
@@ -55,7 +98,7 @@ class BaseDatasetHandler(ABC):
 class PythonAlpacaHandler(BaseDatasetHandler):
     """Handler for the Python Code Instructions dataset (Alpaca style)."""
     
-    def load_data(self, split: str = 'train', test_size: float = 0.1, **kwargs) -> Dict[str, Any]:
+    def load_default_data(self, split: str = 'train', test_size: float = 0.1, **kwargs) -> Dict[str, Any]:
         """
         Load the Alpaca-style Python code instructions dataset and split into train/test.
         Returns:
