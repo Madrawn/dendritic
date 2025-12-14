@@ -3,3 +3,5 @@ __pycache__
 *.pth
 results/
 data_cache/
+.coverage
+.vscode
