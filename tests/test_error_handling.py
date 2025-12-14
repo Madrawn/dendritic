@@ -1,19 +1,11 @@
 import pytest
-import torch
-import os
-import json
-from unittest.mock import patch, MagicMock
-from dendritic.dataset_handlers.BaseDatasetHandler import BaseDatasetHandler
-from dendritic import enhancement
+from unittest.mock import MagicMock
 from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
-from dendritic.layers.DendriticLayer import DendriticLayer
 from dendritic.enhancement import (
     NoLayersConvertedError,
-    apply_dendritic_state,
     enhance_model_with_dendritic
 )
 from transformers.models.gpt2 import GPT2LMHeadModel
-from transformers.tokenization_utils import PreTrainedTokenizer
 
 
 # =====================
