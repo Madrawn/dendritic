@@ -8,6 +8,8 @@ import math
 import torch
 import torch.nn as nn
 
+from .PretrainingConfig import PretrainingConfig
+
 
 @dataclass
 class ParamBreakdown:
@@ -240,3 +242,185 @@ def verify_param_match(
     }
     
     return rel_diff <= tolerance, details
+
+
+def calculate_mlp_params_dendritic_stack(
+    embed_dim: int,
+    hidden_dim: int,
+    poly_rank: int,
+    diag_rank: Optional[int] = None
+) -> int:
+    """Calculate DendriticStack MLP parameters."""
+    if diag_rank is None:
+        diag_rank = max(4, poly_rank // 4)
+
+    # DendriticStack parameters
+    from .param_utils import count_dendritic_layer_params
+
+    # Calculate parameters for the stack
+    # Layer1: embed_dim -> bottleneck_dim (poly_rank*2)
+    bottleneck_dim = poly_rank * 2
+    layer1_params = count_dendritic_layer_params(
+        embed_dim, bottleneck_dim, poly_rank, diag_rank, bias=True
+    )
+
+    # Layer2: bottleneck_dim -> hidden_dim
+    layer2_params = count_dendritic_layer_params(
+        bottleneck_dim, hidden_dim, poly_rank, diag_rank, bias=True
+    )
+
+    # Base linear: embed_dim -> hidden_dim
+    base_linear_params = embed_dim * hidden_dim + hidden_dim
+
+    # Stack total
+    stack_params = layer1_params + layer2_params + base_linear_params
+
+    # Standard fc2
+    fc2_params = hidden_dim * embed_dim + embed_dim
+
+    return stack_params + fc2_params
+
+
+def calculate_mlp_params_dendritic(
+    embed_dim: int,
+    hidden_dim: int,
+    poly_rank: int,
+    diag_rank: Optional[int] = None
+) -> int:
+    """Calculate DendriticMLP parameters."""
+    if diag_rank is None:
+        diag_rank = max(4, poly_rank // 4)
+
+    # DendriticLayer (fc1)
+    from .param_utils import count_dendritic_layer_params
+    dendritic_fc1 = count_dendritic_layer_params(
+        embed_dim, hidden_dim, poly_rank, diag_rank, bias=True
+    )
+
+    # Standard fc2
+    fc2_params = hidden_dim * embed_dim + embed_dim
+
+    return dendritic_fc1 + fc2_params
+
+
+def calculate_mlp_params_baseline(embed_dim: int, hidden_dim: int) -> int:
+    """Calculate standard MLP parameters."""
+    # fc1: embed_dim * hidden_dim + hidden_dim
+    # fc2: hidden_dim * embed_dim + embed_dim
+    return 2 * embed_dim * hidden_dim + hidden_dim + embed_dim
+
+
+def calculate_non_mlp_params(config: PretrainingConfig) -> int:
+    """Calculate parameters outside MLP (embeddings, attention, layer norms)."""
+    embed_dim = config.embed_dim
+    vocab_size = config.vocab_size
+    num_layers = config.num_layers
+    num_heads = config.num_heads
+    max_seq_len = config.max_seq_len
+
+    # Token embeddings (shared with output head)
+    tok_emb_params = vocab_size * embed_dim
+
+    # Position embeddings
+    pos_emb_params = max_seq_len * embed_dim
+
+    # Per-layer non-MLP params
+    per_layer_params = 0
+
+    # LayerNorm x2: 2 * 2 * embed_dim (weight + bias)
+    per_layer_params += 4 * embed_dim
+
+    # Attention: Q, K, V projections + output projection
+    # Q, K, V: 3 * (embed_dim * embed_dim + embed_dim)
+    # Out: embed_dim * embed_dim + embed_dim
+    attn_params = 4 * (embed_dim * embed_dim + embed_dim)
+    per_layer_params += attn_params
+
+    # Final layer norm
+    final_ln_params = 2 * embed_dim
+
+    total = (
+        tok_emb_params +
+        pos_emb_params +
+        num_layers * per_layer_params +
+        final_ln_params
+    )
+
+    return total
+
+
+def find_matching_hidden_dims(config: PretrainingConfig) -> Tuple[int, int, int]:
+    """
+    Find hidden dimensions that give equal total parameters for all three variants.
+
+    Returns:
+        (baseline_hidden_dim, dendritic_hidden_dim, stack_hidden_dim)
+    """
+    embed_dim = config.embed_dim
+    num_layers = config.num_layers
+    poly_rank = config.poly_rank
+
+    non_mlp_params = calculate_non_mlp_params(config)
+
+    # Standard ratio is 4x embed_dim
+    baseline_hidden = 4 * embed_dim
+    baseline_mlp_per_layer = calculate_mlp_params_baseline(embed_dim, baseline_hidden)
+    baseline_total = non_mlp_params + num_layers * baseline_mlp_per_layer
+
+    # Target total params
+    target_total = baseline_total
+    target_mlp_budget = target_total - non_mlp_params
+    target_per_layer = target_mlp_budget / num_layers
+
+    # Binary search for dendritic hidden_dim
+    diag_rank = max(4, poly_rank // 4)
+
+    def dendritic_mlp_params(h: int) -> int:
+        return calculate_mlp_params_dendritic(embed_dim, h, poly_rank, diag_rank)
+
+    def stack_mlp_params(h: int) -> int:
+        return calculate_mlp_params_dendritic_stack(embed_dim, h, poly_rank, diag_rank)
+
+    # Search for dendritic hidden_dim
+    lo, hi = embed_dim, 8 * embed_dim
+    while lo < hi:
+        mid = (lo + hi) // 2
+        params = dendritic_mlp_params(mid)
+        if params < target_per_layer:
+            lo = mid + 1
+        else:
+            hi = mid
+    dendritic_hidden = lo
+
+    # Fine-tune dendritic hidden_dim
+    best_dendritic = dendritic_hidden
+    best_diff = abs(dendritic_mlp_params(dendritic_hidden) - target_per_layer)
+    for h in [dendritic_hidden - 1, dendritic_hidden, dendritic_hidden + 1]:
+        if h > 0:
+            diff = abs(dendritic_mlp_params(h) - target_per_layer)
+            if diff < best_diff:
+                best_diff = diff
+                best_dendritic = h
+
+    # Search for stack hidden_dim
+    lo, hi = embed_dim, 8 * embed_dim
+    while lo < hi:
+        mid = (lo + hi) // 2
+        params = stack_mlp_params(mid)
+        if params < target_per_layer:
+            lo = mid + 1
+        else:
+            hi = mid
+    stack_hidden = lo
+
+    # Fine-tune stack hidden_dim
+    best_stack = stack_hidden
+    best_diff = abs(stack_mlp_params(stack_hidden) - target_per_layer)
+    for h in [stack_hidden - 1, stack_hidden, stack_hidden + 1]:
+        if h > 0:
+            diff = abs(stack_mlp_params(h) - target_per_layer)
+            if diff < best_diff:
+                best_diff = diff
+                best_stack = h
+
+    return baseline_hidden, best_dendritic, best_stack

@@ -105,7 +105,7 @@ def get_gpt2_layer_dimensions() -> Dict[str, List[Tuple[int, int]]]:
 
 def calculate_dendritic_trainable_params(config: FinetuningConfig) -> int:
     """Calculate trainable params when using dendritic enhancement."""
-    from dendritic.experiments.param_utils import count_dendritic_stack_params
+    from .param_utils import count_dendritic_stack_params
     
     layer_dims = get_gpt2_layer_dimensions()
     
@@ -115,14 +115,17 @@ def calculate_dendritic_trainable_params(config: FinetuningConfig) -> int:
             # Get the correct key
             key = layer_name if layer_name in layer_dims else layer_name.replace("mlp.", "")
             for in_dim, out_dim in layer_dims.get(key, []):
+                # Compute total parameters for the DendriticStack (including bias in both internal layers)
                 stack_params = count_dendritic_stack_params(
-                    in_dim, 
-                    out_dim, 
+                    in_dim,
+                    out_dim,
                     config.poly_rank,
-                    preserve_linear_path=True
+                    preserve_linear_path=True,
                 )
-                # Subtract base linear params (already in model, frozen)
+                # Base linear path (frozen) includes weight and bias
                 base_linear_params = in_dim * out_dim + out_dim
+                # No extra bias subtraction – the base linear bias is already accounted for,
+                # and the DendriticStack bias terms are correctly counted in `stack_params`.
                 trainable = stack_params - base_linear_params
                 total_params += trainable
     
@@ -170,7 +173,6 @@ def setup_dendritic_model(
         freeze_linear=True,
         verbose=False,
         dendritic_cls=DendriticStack,
-        dendritic_kwargs={"dropout": config.dendritic_dropout},
     )
     
     return enhanced_model.to(device) # type: ignore

@@ -56,8 +56,8 @@ def _validate_enhancement_params(
     target_layers: Optional[List[str]]
 ) -> None:
     """Validate enhancement parameters."""
-    if not isinstance(model, PreTrainedModel):
-        raise TypeError("model must be a PyTorch PreTrainedModel")
+    if not isinstance(model, nn.Module):
+        raise TypeError("model must be a PyTorch nn.Module instance")
     
     if poly_rank != "auto" and (not isinstance(poly_rank, int) or poly_rank <= 0):
         raise ValueError("poly_rank must be 'auto' or a positive integer")

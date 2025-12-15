@@ -1,6 +1,6 @@
 # dendritic/experiments/run_experiments.py
 """
-Main script to run both experiments.
+Main script to run both .
 
 Usage:
     python -m dendritic.experiments.run_experiments --experiment pretraining
@@ -15,17 +15,16 @@ from pathlib import Path
 from datetime import datetime
 import os
 
+from .PretrainingConfig import PretrainingConfig
+
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
-import peft
 from numpy import isin
 import torch
 from torch.utils.data import DataLoader
-from dendritic.experiments.experiment_pretraining import (
+from .PretrainingConfig import (
     PretrainingConfig as config_pretrain,
 )
-from dendritic.experiments.experiment_finetuning import (
-    FinetuningConfig as config_finetune,
-)
+from .experiment_finetuning import FinetuningConfig
 from transformers.models.gpt2 import GPT2Tokenizer
 
 
@@ -59,7 +58,9 @@ def load_pretraining_data(
     from datasets import load_dataset, Dataset
 
     # Compute required samples: steps * batch_size * epochs (safety margin +10%)
-    num_train_samples = int(config.training_steps * config.batch_size * 1 * 1.1) * 5 # compensate for packing
+    num_train_samples = (
+        int(config.training_steps * config.batch_size * 1 * 1.1) * 5
+    )  # compensate for packing
     num_eval_samples = int(num_train_samples * 0.1)
 
     print(
@@ -76,22 +77,28 @@ def load_pretraining_data(
     assert isinstance(full_train, Dataset)
     assert isinstance(full_eval, Dataset)
     # Filter empty lines
-    train_filtered = full_train.filter(lambda x: len(x['text']) > 10)
-    eval_filtered = full_eval.filter(lambda x: len(x['text']) > 10)
-    
+    train_filtered = full_train.filter(lambda x: len(x["text"]) > 10)
+    eval_filtered = full_eval.filter(lambda x: len(x["text"]) > 10)
+
     # SAFE SELECTION: Take the minimum of (what we want, what we have)
     # This prevents the IndexError
-    
+
     # For Train: Ensure we have enough, or warn the user
     actual_train_len = len(train_filtered)
     if actual_train_len < num_train_samples:
-        print(f"WARNING: Requested {num_train_samples} train samples, but only {actual_train_len} available.")
+        print(
+            f"WARNING: Requested {num_train_samples} train samples, but only {actual_train_len} available."
+        )
         print("Training will run for fewer steps or cycle data.")
-    
-    train_dataset = train_filtered.select(range(min(num_train_samples, actual_train_len)))
-    
+
+    train_dataset = train_filtered.select(
+        range(min(num_train_samples, actual_train_len))
+    )
+
     # For Eval: Just take whatever is available up to the target
-    eval_dataset = eval_filtered.select(range(min(num_eval_samples, len(eval_filtered))))
+    eval_dataset = eval_filtered.select(
+        range(min(num_eval_samples, len(eval_filtered)))
+    )
 
     # def tokenize_function(examples):
     #     tokenized = tokenizer(
@@ -109,7 +116,8 @@ def load_pretraining_data(
         # GPT-2 tokenizer handles \n (usually maps to token ID 198)
         texts = [t + "\n" for t in examples["text"]]
         return tokenizer(texts)
-    num_cores = multiprocessing.cpu_count()
+
+    num_cores = multiprocessing.cpu_count() // 2 or 1
 
     # 1. Tokenize without padding first
     train_ds = train_dataset.map(
@@ -130,10 +138,10 @@ def load_pretraining_data(
         # Concatenate all texts
         concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
         total_length = len(concatenated_examples[list(examples.keys())[0]])
-        
+
         # We drop the small remainder at the end
         total_length = (total_length // max_length) * max_length
-        
+
         # Split into chunks of max_length
         result = {
             k: [t[i : i + max_length] for i in range(0, total_length, max_length)]
@@ -161,27 +169,29 @@ def load_pretraining_data(
     # ========================== DEBUGGING BLOCK START ============================
     print("\n" + "!" * 40)
     print("DEBUG: INSPECTING DATASET INTEGRITY")
-    
+
     # Create a temporary loader to grab one batch
-    debug_loader = DataLoader(train_dataset, batch_size=4)
+    debug_loader = DataLoader(train_dataset, batch_size=4)  # type: ignore
     batch = next(iter(debug_loader))
-    
+
     inp = batch["input_ids"]
     lbl = batch["labels"]
     pad_id = tokenizer.pad_token_id
-    
+
     # 1. Check Ratio of Padding
     total_tokens = inp.numel()
     pad_tokens = (inp == pad_id).sum().item()
     print(f"Batch Shape: {inp.shape}")
     print(f"Pad Token ID: {pad_id}")
-    print(f"Padding Ratio: {pad_tokens / total_tokens:.2%} ({pad_tokens}/{total_tokens} tokens)")
-    
+    print(
+        f"Padding Ratio: {pad_tokens / total_tokens:.2%} ({pad_tokens}/{total_tokens} tokens)"
+    )
+
     # 2. Check Masking (Crucial for correct PPL)
     # In PyTorch CrossEntropyLoss, -100 is ignored. If this is 0%, your PPL is fake.
     masked_tokens = (lbl == -100).sum().item()
     print(f"Masked Label Ratio (-100): {masked_tokens / total_tokens:.2%}")
-    
+
     # 3. Visual Inspection
     print("-" * 20 + " Sample 0 (Decoded) " + "-" * 20)
     print("".join(tokenizer.decode(inp[0])))
@@ -192,10 +202,20 @@ def load_pretraining_data(
     print("!" * 40 + "\n")
     # ========================== DEBUGGING BLOCK END ============================
     train_dataloader = DataLoader(
-        train_dataset, batch_size=config.batch_size, shuffle=True
+        train_dataset,  # type: ignore
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=4,  # Use background processes to load data
+        pin_memory=True,  # Speeds up CPU-to-GPU transfer
+        persistent_workers=True,  # Keeps workers alive, avoids re-initialization overhead
     )
     eval_dataloader = DataLoader(
-        eval_dataset, batch_size=config.batch_size, shuffle=False
+        eval_dataset,  # type: ignore
+        batch_size=config.batch_size,
+        shuffle=False,
+        # num_workers=num_cores,  # Use background processes to load data
+        # pin_memory=True,  # Speeds up CPU-to-GPU transfer
+        # persistent_workers=True,  # Keeps workers alive, avoids re-initialization overhead
     )
 
     return train_dataloader, eval_dataloader
@@ -254,10 +274,10 @@ def load_finetuning_data(
         split = dataset.train_test_split(test_size=0.1)
 
         train_dataloader = DataLoader(
-            split["train"], batch_size=batch_size, shuffle=True
+            split["train"], batch_size=batch_size, shuffle=True  # type: ignore
         )
         eval_dataloader = DataLoader(
-            split["test"], batch_size=batch_size, shuffle=False
+            split["test"], batch_size=batch_size, shuffle=False  # type: ignore
         )
 
     return train_dataloader, eval_dataloader
@@ -265,19 +285,20 @@ def load_finetuning_data(
 
 def run_pretraining_experiment(device: str):
     """Run pretraining comparison experiment."""
-    from dendritic.experiments.experiment_pretraining import (
-        PretrainingConfig,
+    from .experiment_pretraining import (
         run_pretraining_experiment as run_exp,
     )
 
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
 
+    training_steps_count = 120000
     config = PretrainingConfig(
-        training_steps=3000,
-        batch_size=32,
-        eval_interval=300,
-        seeds=[42, 71, 123],  # Use fewer seeds for faster testing
+        training_steps=training_steps_count,
+        batch_size=16,
+        eval_interval=min(max(training_steps_count // 20, 1), 500),
+        seeds=[42],  # Use fewer seeds for faster testing
+        scheduler_type="plateau",
     )
 
     train_dl, eval_dl = load_pretraining_data(
@@ -292,7 +313,7 @@ def run_pretraining_experiment(device: str):
 
 def run_finetuning_experiment(device: str):
     """Run finetuning comparison experiment."""
-    from dendritic.experiments.experiment_finetuning import (
+    from .experiment_finetuning import (
         FinetuningConfig,
         run_finetuning_experiment as run_exp,
     )

@@ -57,11 +57,9 @@ def _test():
     # Test gradient flow for stack
     loss_stack = y_stack.sum()
     loss_stack.backward()
-    assert stack.layer1.w1.grad is not None
-    assert stack.layer2.w1.grad is not None
-    assert stack.layer1.scale.grad is not None
-    assert stack.layer2.scale.grad is not None
-
+    for w in stack.projections:
+        assert w.grad is not None
+    assert stack.poly_out.grad is not None
     # Test MLP
     mlp = DendriticMLP(256, 1024, poly_rank=16)
     x = torch.randn(4, 128, 256)  # [batch, seq, embed]
