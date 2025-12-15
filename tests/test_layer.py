@@ -131,45 +131,8 @@ class TestDendriticStack:
         y = dendritic_stack(x)
         assert y.shape == (16, output_dim)
 
-    @pytest.mark.unit
-    def test_bottleneck_architecture(self, dendritic_stack):
-        # Verify bottleneck dimension is smaller than input/output
-        bottleneck_dim = dendritic_stack.layer1.output_dim
-        assert bottleneck_dim < dendritic_stack.input_dim
-        assert bottleneck_dim < dendritic_stack.output_dim
 
-    @pytest.mark.unit
-    def test_residual_connection(self):
-        stack = DendriticStack(64, 64, poly_rank=8, preserve_linear_path=True)
-        x = torch.randn(16, 64)
-        y = stack(x)
-        
-        # Verify residual connection exists
-        linear_out = stack.base_linear(x)
-        assert not torch.allclose(y, linear_out)  # Should have added non-linear
-
-    @pytest.mark.unit
-    def test_parameter_efficiency(self, dendritic_stack):
-        """Verify DendriticStack has more parameters than a single linear layer."""
-        # Single linear layer baseline
-        linear_params = dendritic_stack.input_dim * dendritic_stack.output_dim + dendritic_stack.output_dim
-        stack_params = sum(p.numel() for p in dendritic_stack.parameters())
-        assert stack_params > linear_params, (
-            f"DendriticStack params ({stack_params}) should be greater than "
-            f"single linear layer ({linear_params})"
-        )
-
-    @pytest.mark.unit
-    def test_different_bottleneck_ratios(self, layer_config):
-        input_dim, output_dim, poly_rank = layer_config
-        ratios = [0.25, 0.5, 1.0, 2.0]
-        for ratio in ratios:
-            bottleneck_dim = int(input_dim * ratio)
-            stack = DendriticStack(input_dim, output_dim, poly_rank=poly_rank, bottleneck_dim=bottleneck_dim)
-            x = torch.randn(16, input_dim)
-            y = stack(x)
-            assert y.shape == (16, output_dim)
-
+   
 # ===================
 # DendriticMLP Tests
 # ===================

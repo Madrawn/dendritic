@@ -1,8 +1,12 @@
 import json
 import numpy as np
 import pytest
-from dendritic.experiments.experiment_pretraining import save_experiment_results, ExperimentResults, TrainingResult, PretrainingConfig
+from dendritic.experiments.analysis import save_experiment_results
 from pathlib import Path
+
+from dendritic.experiments.ExperimentResults import ExperimentResults
+from dendritic.experiments.PretrainingConfig import PretrainingConfig
+from dendritic.experiments.TrainingResult import TrainingResult
 
 def test_save_experiment_results_handles_numpy_types(tmp_path):
     """Test that save_experiment_results handles numpy types correctly."""
@@ -16,8 +20,10 @@ def test_save_experiment_results_handles_numpy_types(tmp_path):
     }
     
     results = ExperimentResults(
-        baseline_results=[],
-        dendritic_results=[],
+        model_results={
+            "baseline": [],
+            "dendritic": []
+        },
         statistical_analysis=statistical_analysis,
         config=config
     )
