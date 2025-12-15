@@ -5,84 +5,77 @@ from dendritic.layers.DendriticLayer import DendriticLayer
 import torch
 import torch.nn as nn
 from gguf import Literal
+import torch.nn.functional as F
 
 
 class DendriticStack(nn.Module):
     """
-    Efficient stack with bottleneck architecture.
-
-    For degree-4 interactions, we don't need huge hidden dims.
-    Use: input → bottleneck → output
-
-    All parameters (poly_rank, diag_rank, independent_inputs, init_scale, bias, etc.)
-    are passed identically to both internal DendriticLayer instances.
-    This ensures consistent behavior and simplifies usage.
-
-    Args:
-        input_dim: Input feature dimension
-        output_dim: Output feature dimension
-        poly_rank: Rank for quadratic interactions (used for both layers)
-        bottleneck_dim: Bottleneck hidden dimension (default: min(input_dim, output_dim)//2, at least 2x poly_rank)
-        activation: Activation function between layers (default: GELU)
-        independent_inputs, diag_rank, init_scale, bias, dropout: Passed to both DendriticLayer layers
+    Clean degree-k polynomial, drop-in Linear replacement.
+    Activation comes from the surrounding architecture.
     """
-
+    
     def __init__(
         self,
         input_dim: int,
         output_dim: int,
         poly_rank: int = 16,
-        bottleneck_dim: Optional[int] = None,
-        activation: Optional[nn.Module] = None,
+        poly_degree: int = 3,
         independent_inputs: bool = False,
-        diag_rank: Optional[int] | Literal['auto'] = "auto",
+        diag_rank: Optional[int] | Literal['auto'] = "auto",  # Changed default to flexible
         init_scale: float = 0.1,
         bias: bool = True,
-        dropout: float = 0.0,
-        # NEW ARGUMENT
-        preserve_linear_path: bool = True,
+
     ):
         super().__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
+        # Linear pathway (preserved for initialization from pretrained)
+        self.linear = nn.Linear(input_dim, output_dim, bias=bias)
+        
+        # Degree-k pathway via k-way product
+        self.projections = nn.ParameterList([
+            nn.Parameter(torch.empty(poly_rank, input_dim))
+            for _ in range(poly_degree)
+        ])
+        self.poly_out = nn.Parameter(torch.empty(output_dim, poly_rank))
+        self.scale = nn.Parameter(torch.tensor(init_scale))
+                # Optional diagonal        
+                # # Logic for auto-configuring the diagonal rank
+        if diag_rank is None or diag_rank == "auto":
+            if independent_inputs:
+                self.diag_rank = poly_rank
+            else:
+                self.diag_rank = max(4, poly_rank // 4)
+        else:
+            self.diag_rank = diag_rank
 
-        # ... (Existing logic for bottleneck_dim calculation) ...
-        if bottleneck_dim is None:
-            bottleneck_dim = poly_rank * 2
-
-        # The Non-Linear Stack
-        self.layer1 = DendriticLayer(
-            input_dim, bottleneck_dim, poly_rank=poly_rank,
-            independent_inputs=independent_inputs, diag_rank=diag_rank,
-            init_scale=init_scale, bias=True # Bias needed for internal stack
-        )
-        self.act = activation if activation is not None else nn.GELU()
-        self.dropout = nn.Dropout(dropout)
-        self.layer2 = DendriticLayer(
-            bottleneck_dim, output_dim, poly_rank=poly_rank,
-            independent_inputs=independent_inputs, diag_rank=diag_rank,
-            init_scale=init_scale, bias=bias
-        )
-
-        # NEW: The "Identity" Path
-        # This will hold the original pre-trained weights
-        self.preserve_linear_path = preserve_linear_path
-        if self.preserve_linear_path:
-            self.base_linear = nn.Linear(input_dim, output_dim, bias=bias)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # 1. Compute the Polynomial/Non-linear Stack
-        stack_out = self.layer1(x)
-        stack_out = self.act(stack_out)
-        stack_out = self.dropout(stack_out)
-        stack_out = self.layer2(stack_out)
-
-        # 2. Add the Base Linear Path (Original Weights)
-        if self.preserve_linear_path:
-            return self.base_linear(x) + stack_out
-
-        return stack_out
+        if isinstance(self.diag_rank, int) and self.diag_rank > 0:
+            diag_rank = max(4, poly_rank // 4)
+            self.w_diag_in = nn.Parameter(torch.empty(diag_rank, input_dim))
+            self.w_diag_out = nn.Parameter(torch.empty(output_dim, diag_rank))
+            self.diag_scale = nn.Parameter(torch.tensor(init_scale))
+            self.use_diagonal = True
+        else:
+            self.w_diag_in = None
+            self.w_diag_out = None
+            self.diag_scale = None
+        self._reset_parameters()
     
+    def _reset_parameters(self):
+        self.linear.reset_parameters()
+        for w in self.projections:
+            nn.init.orthogonal_(w, gain=0.1)
+        nn.init.orthogonal_(self.poly_out, gain=0.1)
+        if self.use_diagonal:
+            nn.init.orthogonal_(self.w_diag_in, gain=0.1)
+            nn.init.orthogonal_(self.w_diag_out, gain=0.1)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.linear(x)
+        
+        # k-way product → degree-k polynomial
+        poly = F.linear(x, self.projections[0])
+        for w in self.projections[1:]:
+            poly = poly * F.linear(x, w)
+        
+        return out + self.scale * F.linear(poly, self.poly_out)    
 
 try:
     from torch.serialization import add_safe_globals
