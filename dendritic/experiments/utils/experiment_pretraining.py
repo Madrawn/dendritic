@@ -18,7 +18,9 @@ import torch
 from pathlib import Path
 from typing import Optional, Tuple
 
-from .MiniGPT import MiniGPT
+from experiments.analysis.analysis import analyze_results, print_experiment_summary, save_experiment_results
+from experiments.models.MiniGPT import MiniGPT
+
 from .PretrainingConfig import PretrainingConfig
 def _build_model(
     config: PretrainingConfig,
@@ -45,11 +47,7 @@ from tqdm import tqdm
 
 # For statistical analysis
 
-from .analysis import (
-    analyze_results,
-    print_experiment_summary,
-    save_experiment_results,
-)
+
 from .TrainingResult import TrainingResult
 from .ExperimentResults import ExperimentResults
 from .custom_scaler import CohortLRScheduler

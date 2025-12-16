@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import List
 
 
 @dataclass
@@ -39,7 +38,7 @@ class PretrainingConfig:
     eval_batches: int = 100
 
     # Experiment
-    seeds: List[int] = field(default_factory=lambda: [42, 123, 456, 789, 1011])
+    seeds: list[int] = field(default_factory=lambda: [42, 123, 456, 789, 1011])
     output_dir: str = "results/pretraining_comparison"
 
     # Computed fields (set in __post_init__)

@@ -65,6 +65,7 @@ class DendriticStack(nn.Module):
             nn.init.orthogonal_(w, gain=0.1)
         nn.init.orthogonal_(self.poly_out, gain=0.1)
         if self.use_diagonal:
+            assert self.w_diag_in and self.w_diag_out
             nn.init.orthogonal_(self.w_diag_in, gain=0.1)
             nn.init.orthogonal_(self.w_diag_out, gain=0.1)
     def forward(self, x: torch.Tensor) -> torch.Tensor:

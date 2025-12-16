@@ -1,9 +1,6 @@
-from pyexpat import model
 from scipy import stats
-from typing import Any, Dict, List
+from typing import Any
 
-from sklearn import base
-from .ExperimentResults import ExperimentResults
 
 
 import numpy as np
@@ -14,7 +11,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from .TrainingResult import TrainingResult
+from dendritic.experiments.utils.ExperimentResults import ExperimentResults, TrainingResult
+
 
 
 def save_experiment_results(results: ExperimentResults, output_dir: Path) -> None:
@@ -182,8 +180,8 @@ def print_experiment_summary(results: ExperimentResults) -> None:
 
 
 def analyze_results(
-    model_results: Dict[str, List[TrainingResult]]
-) -> Dict[str, Any]:
+    model_results: dict[str, list[TrainingResult]]
+) -> dict[str, Any]:
     """Perform statistical analysis on experiment results.
     
     Args:
@@ -193,13 +191,13 @@ def analyze_results(
         Dictionary containing statistical analysis results.
     """
     
-    def extract_metrics(results: List[TrainingResult]) -> tuple:
+    def extract_metrics(results: list[TrainingResult]) -> tuple:
         """Extract final and best perplexities from training results."""
         final_ppl = [r.final_perplexity for r in results]
         best_ppl = [r.best_perplexity for r in results]
         return final_ppl, best_ppl
 
-    def calculate_comparison(ppl1: List[float], ppl2: List[float]) -> tuple:
+    def calculate_comparison(ppl1: list[float], ppl2: list[float]) -> tuple:
         """Calculate statistical comparison between two sets of perplexities."""
         t_stat, p_value = stats.ttest_rel(ppl1, ppl2)
         diff = np.array(ppl1) - np.array(ppl2)

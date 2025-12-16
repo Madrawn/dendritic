@@ -1,13 +1,13 @@
 import torch
 import numpy as np
-from typing import Optional
 
-from .MiniGPT import MiniGPT
 from torch.utils.data import DataLoader
+
+from experiments.models.MiniGPT import MiniGPT
 
 
 def evaluate(
-    model: MiniGPT, dataloader: DataLoader, max_batches: Optional[int], device: str
+    model: MiniGPT, dataloader: DataLoader, max_batches: int | None, device: str
 ) -> float:
     """Evaluate model and return mean loss."""
     model.eval()

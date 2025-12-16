@@ -10,7 +10,8 @@ import torch
 from pathlib import Path
 from typing import Optional, Tuple
 
-from .MiniGPT import MiniGPT
+from experiments.analysis.analysis import analyze_results, print_experiment_summary, save_experiment_results
+
 from .experiment_pretraining import create_models, train_single_run, evaluate
 from .PretrainingConfig import PretrainingConfig
 from torch.utils.data import DataLoader, Dataset
@@ -18,11 +19,7 @@ import numpy as np
 from tqdm import tqdm
 
 # For statistical analysis
-from .analysis import (
-    analyze_results,
-    print_experiment_summary,
-    save_experiment_results,
-)
+
 from .TrainingResult import TrainingResult
 from .ExperimentResults import ExperimentResults
 from .custom_scaler import CohortLRScheduler

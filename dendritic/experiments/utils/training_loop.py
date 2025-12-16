@@ -5,7 +5,8 @@ import torch
 import numpy as np
 from tqdm import tqdm
 
-from .MiniGPT import MiniGPT
+from experiments.models.MiniGPT import MiniGPT
+
 from .PretrainingConfig import PretrainingConfig
 from torch.utils.data import DataLoader
 from .TrainingResult import TrainingResult

@@ -1,18 +1,15 @@
 # dendritic/experiments/visualization.py
 """Visualization utilities for experiment results."""
-import torch
-from typing import Dict, List, Optional, Union
 import json
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-from dendritic.experiments.ExperimentResults import ExperimentResults
-from dendritic.experiments.TrainingResult import TrainingResult
+from ExperimentResults import ExperimentResults, TrainingResult
 
 
 # Model configuration for consistent styling and labeling
-def get_model_config(model_key: str) -> Dict:
+def get_model_config(model_key: str) -> dict:
     """Dynamically generate model configuration based on model key.
 
     Args:
@@ -40,9 +37,9 @@ def get_model_config(model_key: str) -> Dict:
 
 
 def plot_training_curves(
-    results: Union[str, ExperimentResults, Dict], 
-    output_path: Optional[str] = None, 
-    show: bool = True
+    results: str | ExperimentResults | dict,
+    output_path: str | None = None,
+    show: bool = True,
 ):
     """
     Plot training curves from experiment results.
@@ -61,7 +58,7 @@ def plot_training_curves(
         # Use ExperimentResults object directly
         results_data = {
             "model_results": results.model_results,
-            "statistical_analysis": results.statistical_analysis
+            "statistical_analysis": results.statistical_analysis,
         }
     else:
         # Assume it's already a dict
@@ -70,7 +67,9 @@ def plot_training_curves(
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     # Determine experiment type and plot
-    if "baseline" in results_data.get("model_results", {}) and "dendritic" in results_data.get("model_results", {}):
+    if "baseline" in results_data.get(
+        "model_results", {}
+    ) and "dendritic" in results_data.get("model_results", {}):
         # Pretraining experiment (with or without stack) - new format
         plot_pretraining_curves(results_data, axes)
     elif "baseline_runs" in results_data and "dendritic_runs" in results_data:
@@ -90,7 +89,7 @@ def plot_training_curves(
     return fig
 
 
-def plot_pretraining_curves(results: Dict, axes):
+def plot_pretraining_curves(results: dict, axes):
     """Plot pretraining experiment curves."""
     ax1, ax2 = axes
 
@@ -202,7 +201,9 @@ def plot_pretraining_curves(results: Dict, axes):
         y_pos -= y_step
 
 
-def compute_mean_curve(runs: List[Union[Dict, TrainingResult]]) -> Dict[str, List[float]]:
+def compute_mean_curve(
+    runs: list[dict | TrainingResult],
+) -> dict[str, list[float]]:
     """Compute mean curve across runs."""
     # Align steps
     all_steps = set()

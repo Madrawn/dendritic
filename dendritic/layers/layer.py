@@ -122,9 +122,13 @@ def diagnostic_benchmark():
         # Pick k random pairs (no overlap)
         perm = torch.randperm(d)[: 2 * k]
         pairs = perm.reshape(k, 2)
-        result = sum(X[:, i] * X[:, j] for i, j in pairs)
+        result = sum([X[:, i] * X[:, j] for i, j in pairs])
         # Normalize
-        result = result / result.std()
+        if isinstance(result, torch.Tensor):
+            result = result / result.std()
+        else:
+            result = torch.tensor(result, dtype=X.dtype, device=X.device)
+            result = result / result.std()
         return result.unsqueeze(1)
 
     ranks_to_test = [2, 4, 8, 12, 16, 24]
@@ -161,7 +165,7 @@ def diagnostic_benchmark():
                     optimizer.step()
 
                 # R² score
-                ss_res = ((pred - y) ** 2).sum().item()
+                ss_res = ((pred - y) ** 2).sum().item() #type: ignore
                 ss_tot = ((y - y.mean()) ** 2).sum().item()
                 r2 = 1 - ss_res / ss_tot
 
@@ -180,7 +184,7 @@ def diagnostic_benchmark():
 
     targets_struct = {
         "10×(x_i²)": (X[:, :10] ** 2).sum(dim=1, keepdim=True),
-        "10×(x_i·x_{i+1})": sum(X[:, i] * X[:, i + 1] for i in range(10)).unsqueeze(1),
+        "10×(x_i·x_{i+1})": sum(X[:, i] * X[:, i + 1] for i in range(10)).unsqueeze(1), #type: ignore
         "5×diag + 5×cross": (
             (X[:, :5] ** 2).sum(dim=1) + sum(X[:, i] * X[:, i + 5] for i in range(5))
         ).unsqueeze(1),
@@ -232,7 +236,7 @@ def diagnostic_benchmark():
                 loss.backward()
                 optimizer.step()
 
-            ss_res = ((pred - y) ** 2).sum().item()
+            ss_res = ((pred - y) ** 2).sum().item() #type: ignore
             ss_tot = ((y - y.mean()) ** 2).sum().item()
             r2 = 1 - ss_res / ss_tot
 
@@ -298,7 +302,7 @@ def diagnostic_benchmark():
                 loss.backward()
                 optimizer.step()
 
-            ss_res = ((pred - y) ** 2).sum().item()
+            ss_res = ((pred - y) ** 2).sum().item() #type: ignore
             ss_tot = ((y - y.mean()) ** 2).sum().item()
             r2 = 1 - ss_res / ss_tot
 

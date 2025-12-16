@@ -1,5 +1,6 @@
 import logging
-from .MiniGPT import MiniGPT
+
+from experiments.models.MiniGPT import MiniGPT
 from .PretrainingConfig import PretrainingConfig
 from .param_utils import find_matching_hidden_dims, verify_param_match
 

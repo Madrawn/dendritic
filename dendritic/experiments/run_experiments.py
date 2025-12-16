@@ -11,20 +11,15 @@ Usage:
 import argparse
 import logging
 import multiprocessing
-from pathlib import Path
 from datetime import datetime
 import os
-
-from .PretrainingConfig import PretrainingConfig
+from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
+from experiment_finetuning import FinetuningConfig
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
 from numpy import isin
 import torch
 from torch.utils.data import DataLoader
-from .PretrainingConfig import (
-    PretrainingConfig as config_pretrain,
-)
-from .experiment_finetuning import FinetuningConfig
 from transformers.models.gpt2 import GPT2Tokenizer
 
 
@@ -44,7 +39,7 @@ def setup_logging() -> logging.Logger:
 
 def load_pretraining_data(
     tokenizer: GPT2Tokenizer,
-    config: config_pretrain,
+    config: PretrainingConfig,
     max_length: int = 256,
 ):
     """
@@ -285,7 +280,7 @@ def load_finetuning_data(
 
 def run_pretraining_experiment(device: str):
     """Run pretraining comparison experiment."""
-    from .experiment_pretraining import (
+    from dendritic.experiments.utils.experiment_pretraining import (
         run_pretraining_experiment as run_exp,
     )
 
@@ -313,10 +308,6 @@ def run_pretraining_experiment(device: str):
 
 def run_finetuning_experiment(device: str):
     """Run finetuning comparison experiment."""
-    from .experiment_finetuning import (
-        FinetuningConfig,
-        run_finetuning_experiment as run_exp,
-    )
 
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
@@ -329,7 +320,7 @@ def run_finetuning_experiment(device: str):
         tokenizer, max_length=config.max_length, batch_size=config.batch_size
     )
 
-    results = run_exp(train_dl, eval_dl, config, device)
+    results = run_finetuning_experiment(device)
     return results
 
 

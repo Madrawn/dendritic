@@ -84,23 +84,21 @@ def compare_experiments():
     # Print tabular comparison
     print("\nExperiment Comparison")
     print("="*100)
-    print(tabulate(display_df, 
-                 headers='keys', 
-                 tablefmt='grid',
-                 floatfmt=".2f",
-                 numalign="right",
-                 showindex="never"))
+    print(tabulate(display_df.values.tolist(),
+                  headers=display_df.columns.tolist(),
+                  tablefmt='grid',
+                  floatfmt=".2f",
+                  numalign="right"))
     
     # Save to markdown file
     markdown_path = "experiment_comparison.md"
     with open(markdown_path, 'w') as f:
         f.write("# Experiment Comparison Results\n\n")
-        f.write(tabulate(display_df, 
-                        headers='keys', 
+        f.write(tabulate(display_df.values.tolist(),
+                        headers=display_df.columns.tolist(),
                         tablefmt='pipe',
                         floatfmt=".2f",
-                        numalign="right",
-                        showindex="never"))
+                        numalign="right"))
     
     print(f"\nComparison results saved to {markdown_path}")
 

@@ -228,7 +228,11 @@ def test_training_workflow(gpt2_model_and_tokenizer, small_dataset):
         for name, param in enhanced_model.named_parameters():
             if "dendritic" in name or "poly" in name or "scale" in name:
                 grad_exists = param.grad is not None
-                grad_norm = param.grad.norm().item() if grad_exists else 0.0
+                if grad_exists:
+                    assert param.grad is not None
+                    grad_norm = param.grad.norm().item()
+                else:
+                    grad_norm = 0.0
                 print(f"  {name}: grad_exists={grad_exists}, grad_norm={grad_norm:.6f}")
 
         optimizer.step()
