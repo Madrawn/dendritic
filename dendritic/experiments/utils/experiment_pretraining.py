@@ -186,41 +186,59 @@ class PretrainingExperiment:
         return baseline_model, dendritic_model, stack_model, baseline_wave_model
 
     def prefetching_cycle(self, dataloader, device):
-        """Prefetch next batch while GPU is computing."""
-        stream = torch.cuda.Stream()
+        """
+        Prefetch next batch while GPU is computing.
+        Yields (input_ids, labels) directly on device.
+        """
+        # Create a separate stream for data transfer to overlap with compute
+        stream = torch.cuda.Stream() if torch.cuda.is_available() else None
         
         def cycle_inner():
             iterator = iter(dataloader)
             while True:
                 try:
-                    batch = next(iterator)
+                    yield next(iterator)
                 except StopIteration:
                     iterator = iter(dataloader)
-                    batch = next(iterator)
-                yield batch
+                    yield next(iterator)
         
         batch_iter = cycle_inner()
+        
+        # Initial prefetch
         next_batch = next(batch_iter)
         
-        # Pre-load first batch
-        with torch.cuda.stream(stream):
-            next_input = next_batch["input_ids"].to(device, non_blocking=True)
-            next_labels = next_batch["labels"].to(device, non_blocking=True)
-        
-        while True:
-            # Wait for prefetch to complete
-            torch.cuda.current_stream().wait_stream(stream)
-            
-            # Yield current batch
-            input_ids, labels = next_input, next_labels
-            
-            # Start prefetching next batch
-            next_batch = next(batch_iter)
+        # Non-blocking transfer for the first batch
+        if stream:
             with torch.cuda.stream(stream):
                 next_input = next_batch["input_ids"].to(device, non_blocking=True)
                 next_labels = next_batch["labels"].to(device, non_blocking=True)
+        else:
+            next_input = next_batch["input_ids"].to(device)
+            next_labels = next_batch["labels"].to(device)
+        
+        while True:
+            # 1. Sync: Ensure the PREVIOUS prefetch is done before using the data
+            if stream:
+                torch.cuda.current_stream().wait_stream(stream)
             
-            yield {"input_ids": input_ids, "labels": labels}
+            # 2. Hand over the data to the training loop
+            current_input, current_labels = next_input, next_labels
+            
+            # 3. CPU Work: Fetch the NEXT batch from the iterator (Main CPU thread work)
+            #    We do this *before* dispatching GPU work to minimize gaps.
+            next_batch = next(batch_iter)
+            
+            # 4. GPU Dispatch: Start moving NEXT batch asynchronously
+            if stream:
+                with torch.cuda.stream(stream):
+                    next_input = next_batch["input_ids"].to(device, non_blocking=True)
+                    next_labels = next_batch["labels"].to(device, non_blocking=True)
+            else:
+                next_input = next_batch["input_ids"].to(device)
+                next_labels = next_batch["labels"].to(device)
+            
+            # 5. Yield current batch (While loop runs training, step 4 is happening on Stream 2)
+            yield current_input, current_labels
 
     def train_single_run(
         self,
@@ -232,162 +250,135 @@ class PretrainingExperiment:
         device: str,
         optimizer: torch.optim.Optimizer,
     ) -> TrainingResult:
-        """Train a single model and return results (Optimized & Clean Logs)."""
+        """Train a single model and return results (Fixed & Optimized)."""
         
-        # IMPROVEMENT 1: Enable TF32 for Ampere+ GPUs (A100, 3090, 4090, etc.)
-        # This provides a generic ~2-3x speedup on matmul with negligible precision loss.
-        if torch.cuda.is_available() and device.startswith("cuda"):
-            torch.backends.cudnn.benchmark = True  # Auto-tune convolutions
-            torch.backends.cudnn.deterministic = False  # Allow non-deterministic (faster)
-            torch.set_float32_matmul_precision('medium')
+        # ========== 1. CUDA & PRECISION SETUP ==========
+        use_cuda = torch.cuda.is_available() and device.startswith("cuda")
+        if use_cuda:
+            # TF32 allows ~3x speedup on Ampere+ GPUs (A100, 3090, 4090)
+            torch.set_float32_matmul_precision("medium")
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
-        previous_scale = None
-        # Set seed
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-
+            torch.backends.cudnn.benchmark = True
+            
         model = model.to(device)
 
-        # FIX: "reduce-overhead" (CUDA Graphs) causes OverflowError on Windows 
-        # due to 32-bit 'long' C-type limitations in the generated Triton kernels.
-        is_windows = os.name == 'nt'
-        
-        # Select safe compilation mode
-        if is_windows:
-            compile_mode = "default"  # Windows is unstable with CUDA Graphs
+        # ========== 2. COMPILATION ==========
+        # Windows requires "default", Linux benefits from "reduce-overhead" (CUDA Graphs)
+        # We explicitly handle the fallback to ensure V1 parity if on Linux.
+        if os.name == "nt":
+            compile_mode = "default"
         else:
-            compile_mode = "reduce-overhead"  # Linux handles this fine
-
+            compile_mode = "reduce-overhead"
+            
         try:
             logging.info(f"Compiling model with mode='{compile_mode}'...")
             model = torch.compile(model, mode=compile_mode)
         except Exception as e:
-            logging.warning(f"Compilation failed: {e}. Falling back to eager execution.")
-            # Ensure model is raw module if compile fails
+            logging.warning(f"Compilation failed: {e}. Falling back to eager.")
             if hasattr(model, "_orig_mod"):
                 model = model._orig_mod
-                
-        # Scheduler selection (Unchanged logic, just omitted for brevity...)
+
+        # ========== 3. SCHEDULER ==========
+        # Capture config values locally to ensure stability
+        warmup_steps = int(self.config.warmup_steps)
+        training_steps = int(self.config.training_steps)
+        
         if self.config.scheduler_type == "cosine":
             def lr_lambda(step: int) -> float:
-                if step < self.config.warmup_steps:
-                    return step / self.config.warmup_steps
-                progress = (step - self.config.warmup_steps) / (
-                    self.config.training_steps - self.config.warmup_steps
-                )
-                return 0.5 * (1 + np.cos(np.pi * progress))
+                # Explicit float division and check
+                if step < warmup_steps:
+                    return float(step) / float(max(1, warmup_steps))
+                progress = float(step - warmup_steps) / float(max(1, training_steps - warmup_steps))
+                return 0.5 * (1.0 + np.cos(np.pi * progress))
+                
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
         elif self.config.scheduler_type == "plateau":
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer, mode="min", factor=self.config.plateau_factor,
-                patience=self.config.plateau_patience, threshold=self.config.plateau_threshold,
-                cooldown=self.config.plateau_cooldown, min_lr=self.config.plateau_min_lr,
+                patience=self.config.plateau_patience, 
+                threshold=self.config.plateau_threshold
             )
         else:
             raise ValueError(f"Unknown scheduler type: {self.config.scheduler_type}")
 
-        # AMP Setup
-        amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        use_amp = device.startswith("cuda")
-        enable_scaler = (use_amp and amp_dtype == torch.float16)
+        # ========== 4. AMP & SCALER ==========
+        # Use BF16 if available (no scaler needed usually, but good practice to keep logic consistent)
+        bf16_supported = use_cuda and torch.cuda.is_bf16_supported()
+        amp_dtype = torch.bfloat16 if bf16_supported else torch.float16
+        # BF16 doesn't strictly need a scaler, but FP16 does.
+        scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
         
-        # Only create scaler if needed to save memory/overhead
-        scaler = torch.amp.GradScaler("cuda", enabled=True)
+        # ========== 5. SEEDING & DATA ITERATOR (CRITICAL FIX) ==========
+        # We seed RIGHT BEFORE creating the iterator. 
+        # This prevents torch.compile overhead from altering the shuffle order.
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        if use_cuda:
+            torch.cuda.manual_seed_all(seed)
 
-        # Training state
-        best_eval_loss = float("inf")
-        no_improvement_count = 0
-        early_stop_patience = self.config.plateau_patience * self.config.early_stop_multiplier
-        loss_history = []
-
+        # Now create the iterator (Shuffling happens here)
         train_iter = self.prefetching_cycle(train_dataloader, device)
 
-        # ACCUMULATION STATE
-        # We accumulate loss on the GPU to avoid CPU sync
+        # ========== 6. TRAINING STATE ==========
+        best_eval_loss = float("inf")
+        no_improvement_count = 0
+        loss_history = []
+        
+        # Accumulators
         total_train_loss_tensor = torch.tensor(0.0, device=device)
         logging_step_count = 0
         start_time = time.time()
         
-        # Store current loss for TQDM to avoid fetching from GPU every step
-        current_loss_display = 0.0 
+        # Optimization vars
+        clip_grad_norm = self.config.max_grad_norm
+        is_cosine = (self.config.scheduler_type == "cosine")
+        eval_interval = self.config.eval_interval
 
-        if self.config.cohort_scheduler is not None:
-            cohort_scheduler = self._create_cohort_scheduler(self.config.cohort_scheduler, device)
-        else:
-            cohort_scheduler = None
-
-        progress = tqdm(range(self.config.training_steps), desc=f"{model_type} seed={seed}")
+        progress = tqdm(range(training_steps), desc=f"{model_type} seed={seed}")
         model.train()
 
         for step in progress:
-            batch = next(train_iter)
+            # Fetch data (already on GPU via prefetcher)
+            input_ids, labels = next(train_iter)
 
-            # non_blocking=True ONLY works if DataLoader has pin_memory=True
-            input_ids = batch["input_ids"].to(device, non_blocking=True)
-            labels = batch["labels"].to(device, non_blocking=True)
-
-            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
+            # Forward
+            with torch.amp.autocast("cuda", enabled=use_cuda, dtype=amp_dtype):
                 outputs = model(input_ids, labels=labels)
                 loss = outputs["loss"]
 
+            # Backward
             optimizer.zero_grad(set_to_none=True)
-
             scaler.scale(loss).backward()
             
-            # Unscale before clipping
-            scaler.unscale_(optimizer)
+            # Gradient Clipping (Standard logic)
+            if clip_grad_norm > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
 
-            if cohort_scheduler is not None:
-                cohort_scheduler.apply_to_gradients(model)
-                cohort_scheduler.step()
-
-            # Gradient Clipping
-            # Note: This causes a sync. If speed is critical and stability allows, 
-            # consider doing this less frequently or using a fused optimizer that handles it.
-            # Only clip every N steps (or skip entirely if stable)
-            clip_interval = 1  # Tune based on stability
-
-            if step % clip_interval == 0:
-                # scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
-
+            # Step
             scaler.step(optimizer)
             scaler.update()
 
-            # if previous_scale is not None and scaler.get_scale() < previous_scale:
-            #     logging.warning(f"Step {step}: Gradient overflow detected, scale reduced to {scaler.get_scale()}")
-            # previous_scale = scaler.get_scale()
-            if self.config.scheduler_type == "cosine":
+            # Scheduler
+            if is_cosine:
                 scheduler.step()
 
-            # IMPROVEMENT 4: Eliminate CPU Synchronization
-            # OLD: total_train_loss += loss.item()  <-- This forces CPU to wait for GPU every step
-            # NEW: Accumulate detached tensor on GPU
+            # Accumulate Loss (No CPU Sync)
             total_train_loss_tensor += loss.detach()
             logging_step_count += 1
 
-            # IMPROVEMENT 5: Reduced Logging Overhead
-            # Only move data to CPU (loss.item()) when actually printing/logging
+            # Update Progress Bar (Sync only occasionally)
             if step % 100 == 0:
-                # We sync here, but only every 10 steps instead of every 1 step
-                current_loss_display = loss.item()
-                current_lr = optimizer.param_groups[0]["lr"]
-                progress.set_postfix({
-                    "loss": f"{current_loss_display:.4f}",
-                    "no_imp": no_improvement_count,
-                    "lr": f"{current_lr:.6f}",
-                })
+                # We use .item() here which syncs, but only every 100 steps
+                current_loss = loss.item()
+                lr = optimizer.param_groups[0]["lr"]
+                progress.set_postfix({"loss": f"{current_loss:.4f}", "lr": f"{lr:.6f}"})
 
             # Evaluation
-            if (step + 1) % self.config.eval_interval == 0:
-                logging.info(f"Evaluating at step {step+1}")
-                
-                # Calculate average train loss
-                # Sync happens here once per eval interval
+            if (step + 1) % eval_interval == 0:
+                # Calculate average loss from accumulated tensor
                 avg_train_loss = total_train_loss_tensor.item() / logging_step_count
-                
-                # Reset accumulator on GPU
                 total_train_loss_tensor.zero_()
                 logging_step_count = 0
 
@@ -399,21 +390,19 @@ class PretrainingExperiment:
                 model.train()
 
                 perplexity = np.exp(eval_loss)
-
-                # (Plateau logic unchanged...)
-                if self.config.scheduler_type == "plateau":
-                    improvement = best_eval_loss - eval_loss
-                    if improvement > self.config.plateau_threshold or best_eval_loss == float("inf"):
-                        best_eval_loss = eval_loss
-                        no_improvement_count = 0
-                    else:
-                        no_improvement_count += 1
-                    scheduler.step(eval_loss)
-                else:
-                    if eval_loss < best_eval_loss:
-                        best_eval_loss = eval_loss
+                
+                # Update Best
+                if eval_loss < best_eval_loss:
+                    best_eval_loss = eval_loss
                     no_improvement_count = 0
+                else:
+                    no_improvement_count += 1
 
+                # Plateau Scheduler Logic
+                if not is_cosine:
+                    scheduler.step(eval_loss)
+
+                # Logging
                 loss_history.append({
                     "step": step + 1,
                     "train_loss": avg_train_loss,
@@ -421,31 +410,33 @@ class PretrainingExperiment:
                     "perplexity": perplexity,
                     "lr": optimizer.param_groups[0]["lr"],
                 })
-
+                
                 logging.info(
                     f"{model_type} seed={seed} step={step+1}: "
-                    f"train={avg_train_loss:.4f}, eval={eval_loss:.4f}, "
-                    f"ppl={perplexity:.2f}"
+                    f"train={avg_train_loss:.4f}, eval={eval_loss:.4f}, ppl={perplexity:.2f}"
                 )
 
-                if self.config.scheduler_type == "plateau" and no_improvement_count >= early_stop_patience:
+                if self.config.scheduler_type == "plateau" and \
+                   no_improvement_count >= self.config.plateau_patience * self.config.early_stop_multiplier:
                     logging.info("Early stopping triggered.")
                     break
 
+        # Final Cleanup
         training_time = time.time() - start_time
-        loss_val = loss.item() 
+        final_train_loss = loss.item()
+        
+        # Final Eval
         model.eval()
         with torch.no_grad():
             final_eval_loss = self.evaluate(model, eval_dataloader, None, device)
 
         from dendritic.enhancement import get_polynomial_stats
-
         polynomial_stats = get_polynomial_stats(model)
 
         return TrainingResult(
             model_type=model_type,
             seed=seed,
-            final_train_loss=loss_val,
+            final_train_loss=final_train_loss,
             final_eval_loss=final_eval_loss,
             final_perplexity=float(np.exp(final_eval_loss)),
             best_eval_loss=best_eval_loss,
