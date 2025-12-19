@@ -21,7 +21,7 @@ class DendriticStack(nn.Module):
         poly_rank: int = 16,
         poly_degree: int = 3,
         independent_inputs: bool = False,
-        diag_rank: Optional[int] | Literal['auto'] = "auto",  # Changed default to flexible
+        diag_rank: int | Literal['auto'] = "auto",  # Changed default to flexible
         init_scale: float = 0.1,
         bias: bool = True,
 
@@ -48,15 +48,16 @@ class DendriticStack(nn.Module):
             self.diag_rank = diag_rank
 
         if isinstance(self.diag_rank, int) and self.diag_rank > 0:
-            diag_rank = max(4, poly_rank // 4)
-            self.w_diag_in = nn.Parameter(torch.empty(diag_rank, input_dim))
-            self.w_diag_out = nn.Parameter(torch.empty(output_dim, diag_rank))
+            effective_diag_rank = self.diag_rank
+            self.w_diag_in = nn.Parameter(torch.empty(effective_diag_rank, input_dim))
+            self.w_diag_out = nn.Parameter(torch.empty(output_dim, effective_diag_rank))
             self.diag_scale = nn.Parameter(torch.tensor(init_scale))
             self.use_diagonal = True
         else:
             self.w_diag_in = None
             self.w_diag_out = None
             self.diag_scale = None
+            self.use_diagonal = False
         self._reset_parameters()
     
     def _reset_parameters(self):
@@ -65,7 +66,7 @@ class DendriticStack(nn.Module):
             nn.init.orthogonal_(w, gain=0.1)
         nn.init.orthogonal_(self.poly_out, gain=0.1)
         if self.use_diagonal:
-            assert self.w_diag_in and self.w_diag_out
+            assert self.w_diag_in is not None and self.w_diag_out is not None
             nn.init.orthogonal_(self.w_diag_in, gain=0.1)
             nn.init.orthogonal_(self.w_diag_out, gain=0.1)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
