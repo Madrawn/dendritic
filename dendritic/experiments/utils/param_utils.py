@@ -106,36 +106,59 @@ def count_dendritic_stack_params(
     input_dim: int,
     output_dim: int,
     poly_rank: int,
-    bottleneck_dim: Optional[int] = None,
+    bottleneck_dim: Optional[int] = None,  # ignored for new architecture
     diag_rank: Optional[int] = None,
     bias: bool = True,
-    preserve_linear_path: bool = True
+    preserve_linear_path: bool = True,
+    poly_degree: int = 3,
+    independent_inputs: bool = False
 ) -> int:
     """
-    Calculate exact parameter count for a DendriticStack.
-    """
-    if bottleneck_dim is None:
-        bottleneck_dim = poly_rank * 2
+    Calculate exact parameter count for a DendriticStack (new architecture).
     
-    if diag_rank is None:
+    The new DendriticStack consists of:
+    - Linear pathway (preserved for initialization)
+    - Degree-k polynomial pathway with k = poly_degree projections
+    - Optional diagonal pathway
+    
+    Parameters:
+        input_dim, output_dim: layer dimensions
+        poly_rank: rank of polynomial projections
+        bottleneck_dim: ignored (kept for compatibility)
+        diag_rank: diagonal rank; if None or "auto", computed based on independent_inputs
+        bias: whether linear pathway includes bias
+        preserve_linear_path: whether to include linear pathway parameters
+        poly_degree: number of projection matrices (k)
+        independent_inputs: if True, diag_rank = poly_rank; else diag_rank = max(4, poly_rank // 4)
+    """
+    # Determine diagonal rank (same logic as DendriticStack)
+    if diag_rank is None or diag_rank == "auto":
+        if independent_inputs:
+            diag_rank = poly_rank
+        else:
+            diag_rank = max(4, poly_rank // 4)
+    # Ensure diag_rank is int (if "auto" already handled)
+    if isinstance(diag_rank, str):
+        # fallback
         diag_rank = max(4, poly_rank // 4)
     
-    # Layer 1: input_dim -> bottleneck_dim
-    layer1_params = count_dendritic_layer_params(
-        input_dim, bottleneck_dim, poly_rank, diag_rank, bias=True
-    )
-    
-    # Layer 2: bottleneck_dim -> output_dim  
-    layer2_params = count_dendritic_layer_params(
-        bottleneck_dim, output_dim, poly_rank, diag_rank, bias=bias
-    )
-    
-    # Base linear path (if preserved)
-    base_linear_params = 0
+    # Linear pathway (preserved for initialization)
+    linear_params = 0
     if preserve_linear_path:
-        base_linear_params = input_dim * output_dim + (output_dim if bias else 0)
+        linear_params = input_dim * output_dim + (output_dim if bias else 0)
     
-    return layer1_params + layer2_params + base_linear_params
+    # Degree-k polynomial pathway
+    projections_params = poly_degree * (poly_rank * input_dim)
+    poly_out_params = output_dim * poly_rank
+    scale_params = 1
+    
+    # Diagonal pathway (if diag_rank > 0)
+    diag_params = 0
+    if diag_rank > 0:
+        diag_params = diag_rank * input_dim + output_dim * diag_rank + 1
+    
+    total = linear_params + projections_params + poly_out_params + scale_params + diag_params
+    return total
 
 
 def count_lora_params(
@@ -251,33 +274,12 @@ def calculate_mlp_params_dendritic_stack(
     diag_rank: Optional[int] = None
 ) -> int:
     """Calculate DendriticStack MLP parameters."""
-    if diag_rank is None:
-        diag_rank = max(4, poly_rank // 4)
-
-    # DendriticStack parameters
-    from .param_utils import count_dendritic_layer_params
-
-    # Calculate parameters for the stack
-    # Layer1: embed_dim -> bottleneck_dim (poly_rank*2)
-    bottleneck_dim = poly_rank * 2
-    layer1_params = count_dendritic_layer_params(
-        embed_dim, bottleneck_dim, poly_rank, diag_rank, bias=True
+    # DendriticStack parameters (new architecture)
+    stack_params = count_dendritic_stack_params(
+        embed_dim, hidden_dim, poly_rank, diag_rank=diag_rank, bias=True, preserve_linear_path=True
     )
-
-    # Layer2: bottleneck_dim -> hidden_dim
-    layer2_params = count_dendritic_layer_params(
-        bottleneck_dim, hidden_dim, poly_rank, diag_rank, bias=True
-    )
-
-    # Base linear: embed_dim -> hidden_dim
-    base_linear_params = embed_dim * hidden_dim + hidden_dim
-
-    # Stack total
-    stack_params = layer1_params + layer2_params + base_linear_params
-
     # Standard fc2
     fc2_params = hidden_dim * embed_dim + embed_dim
-
     return stack_params + fc2_params
 
 
