@@ -1,5 +1,14 @@
 from dataclasses import dataclass, field
 
+# Configuration for optional Cohort LR Scheduler
+@dataclass
+class CohortSchedulerConfig:
+    """Parameters for the optional CohortLRScheduler."""
+    min_mult: float = 0.5          # Minimum multiplier for LR scaling
+    max_mult: float = 1.0          # Maximum multiplier for LR scaling
+    device: str = "cpu"            # Device for scheduler tensors
+    apply_to_gradients: bool = True  # Whether to modify gradients (default current behavior)
+
 
 @dataclass
 class PretrainingConfig:
@@ -26,7 +35,7 @@ class PretrainingConfig:
     scheduler_type: str = "cosine"  # "cosine" or "plateau"
     
     # ReduceOnPlateau specific parameters
-    plateau_patience: int = 10
+    plateau_patience: int = 2
     plateau_factor: float = 0.5
     plateau_threshold: float = 1e-4
     plateau_cooldown: int = 0
@@ -39,6 +48,8 @@ class PretrainingConfig:
 
     # Experiment
     seeds: list[int] = field(default_factory=lambda: [42, 123, 456, 789, 1011])
+    # Optional Cohort scheduler configuration; if None, original behavior is used
+    cohort_scheduler: CohortSchedulerConfig | None = None
     output_dir: str = "results/pretraining_comparison"
 
     # Computed fields (set in __post_init__)
