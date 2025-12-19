@@ -18,6 +18,7 @@ import os
 import time
 from typing import cast
 import torch
+
 # torch.set_float32_matmul_precision('high')
 
 from pathlib import Path
@@ -192,7 +193,7 @@ class PretrainingExperiment:
         """
         # Create a separate stream for data transfer to overlap with compute
         stream = torch.cuda.Stream() if torch.cuda.is_available() else None
-        
+
         def cycle_inner():
             iterator = iter(dataloader)
             while True:
@@ -201,12 +202,12 @@ class PretrainingExperiment:
                 except StopIteration:
                     iterator = iter(dataloader)
                     yield next(iterator)
-        
+
         batch_iter = cycle_inner()
-        
+
         # Initial prefetch
         next_batch = next(batch_iter)
-        
+
         # Non-blocking transfer for the first batch
         if stream:
             with torch.cuda.stream(stream):
@@ -215,19 +216,19 @@ class PretrainingExperiment:
         else:
             next_input = next_batch["input_ids"].to(device)
             next_labels = next_batch["labels"].to(device)
-        
+
         while True:
             # 1. Sync: Ensure the PREVIOUS prefetch is done before using the data
             if stream:
                 torch.cuda.current_stream().wait_stream(stream)
-            
+
             # 2. Hand over the data to the training loop
             current_input, current_labels = next_input, next_labels
-            
+
             # 3. CPU Work: Fetch the NEXT batch from the iterator (Main CPU thread work)
             #    We do this *before* dispatching GPU work to minimize gaps.
             next_batch = next(batch_iter)
-            
+
             # 4. GPU Dispatch: Start moving NEXT batch asynchronously
             if stream:
                 with torch.cuda.stream(stream):
@@ -236,7 +237,7 @@ class PretrainingExperiment:
             else:
                 next_input = next_batch["input_ids"].to(device)
                 next_labels = next_batch["labels"].to(device)
-            
+
             # 5. Yield current batch (While loop runs training, step 4 is happening on Stream 2)
             yield current_input, current_labels
 
@@ -251,7 +252,7 @@ class PretrainingExperiment:
         optimizer: torch.optim.Optimizer,
     ) -> TrainingResult:
         """Train a single model (Fixed: Seeding, Scaler, and Cohort Scheduler)."""
-        
+
         # ========== 1. CUDA & PRECISION SETUP ==========
         use_cuda = torch.cuda.is_available() and device.startswith("cuda")
         if use_cuda:
@@ -259,7 +260,7 @@ class PretrainingExperiment:
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
             torch.backends.cudnn.benchmark = True
-            
+
         model = model.to(device)
 
         # ========== 2. COMPILATION ==========
@@ -276,19 +277,25 @@ class PretrainingExperiment:
         # ========== 3. SCHEDULER ==========
         warmup_steps = int(self.config.warmup_steps)
         training_steps = int(self.config.training_steps)
-        
+
         if self.config.scheduler_type == "cosine":
+
             def lr_lambda(step: int) -> float:
                 if step < warmup_steps:
                     return float(step) / float(max(1, warmup_steps))
-                progress = float(step - warmup_steps) / float(max(1, training_steps - warmup_steps))
+                progress = float(step - warmup_steps) / float(
+                    max(1, training_steps - warmup_steps)
+                )
                 return 0.5 * (1.0 + np.cos(np.pi * progress))
+
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
         elif self.config.scheduler_type == "plateau":
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode="min", factor=self.config.plateau_factor,
-                patience=self.config.plateau_patience, 
-                threshold=self.config.plateau_threshold
+                optimizer,
+                mode="min",
+                factor=self.config.plateau_factor,
+                patience=self.config.plateau_patience,
+                threshold=self.config.plateau_threshold,
             )
         else:
             raise ValueError(f"Unknown scheduler type: {self.config.scheduler_type}")
@@ -298,11 +305,13 @@ class PretrainingExperiment:
         bf16_supported = use_cuda and torch.cuda.is_bf16_supported()
         amp_dtype = torch.bfloat16 if bf16_supported else torch.float16
         scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
-        
+
         # ========== 5. COHORT SCHEDULER ==========
         # (Restored)
         if self.config.cohort_scheduler is not None:
-            cohort_scheduler = self._create_cohort_scheduler(self.config.cohort_scheduler, device)
+            cohort_scheduler = self._create_cohort_scheduler(
+                self.config.cohort_scheduler, device
+            )
         else:
             cohort_scheduler = None
 
@@ -319,13 +328,13 @@ class PretrainingExperiment:
         best_eval_loss = float("inf")
         no_improvement_count = 0
         loss_history = []
-        
+
         total_train_loss_tensor = torch.tensor(0.0, device=device)
         logging_step_count = 0
         start_time = time.time()
-        
+
         clip_grad_norm = self.config.max_grad_norm
-        is_cosine = (self.config.scheduler_type == "cosine")
+        is_cosine = self.config.scheduler_type == "cosine"
         eval_interval = self.config.eval_interval
 
         progress = tqdm(range(training_steps), desc=f"{model_type} seed={seed}")
@@ -342,7 +351,7 @@ class PretrainingExperiment:
             # Backward
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
-            
+
             # --- CRITICAL: Unscale BEFORE manipulating gradients ---
             # We must unscale here so cohort_scheduler and clipper see real gradients
             scaler.unscale_(optimizer)
@@ -372,7 +381,9 @@ class PretrainingExperiment:
             if step % 100 == 0:
                 current_loss = loss.item()
                 lr_curr = optimizer.param_groups[0]["lr"]
-                progress.set_postfix({"loss": f"{current_loss:.4f}", "lr": f"{lr_curr:.6f}"})
+                progress.set_postfix(
+                    {"loss": f"{current_loss:.4f}", "lr": f"{lr_curr:.6f}"}
+                )
 
             # Evaluation Loop
             if (step + 1) % eval_interval == 0:
@@ -388,7 +399,7 @@ class PretrainingExperiment:
                 model.train()
 
                 perplexity = np.exp(eval_loss)
-                
+
                 if eval_loss < best_eval_loss:
                     best_eval_loss = eval_loss
                     no_improvement_count = 0
@@ -398,33 +409,39 @@ class PretrainingExperiment:
                 if not is_cosine:
                     scheduler.step(eval_loss)
 
-                loss_history.append({
-                    "step": step + 1,
-                    "train_loss": avg_train_loss,
-                    "eval_loss": eval_loss,
-                    "perplexity": perplexity,
-                    "lr": optimizer.param_groups[0]["lr"],
-                })
-                
+                loss_history.append(
+                    {
+                        "step": step + 1,
+                        "train_loss": avg_train_loss,
+                        "eval_loss": eval_loss,
+                        "perplexity": perplexity,
+                        "lr": optimizer.param_groups[0]["lr"],
+                    }
+                )
+
                 logging.info(
                     f"{model_type} seed={seed} step={step+1}: "
                     f"train={avg_train_loss:.4f}, eval={eval_loss:.4f}, ppl={perplexity:.2f}"
                 )
 
-                if self.config.scheduler_type == "plateau" and \
-                   no_improvement_count >= self.config.plateau_patience * self.config.early_stop_multiplier:
+                if (
+                    self.config.scheduler_type == "plateau"
+                    and no_improvement_count
+                    >= self.config.plateau_patience * self.config.early_stop_multiplier
+                ):
                     logging.info("Early stopping triggered.")
                     break
 
         training_time = time.time() - start_time
         final_train_loss = loss.item()
-        
+
         # Final Eval
         model.eval()
         with torch.no_grad():
             final_eval_loss = self.evaluate(model, eval_dataloader, None, device)
 
         from dendritic.enhancement import get_polynomial_stats
+
         polynomial_stats = get_polynomial_stats(model)
 
         return TrainingResult(
@@ -440,6 +457,7 @@ class PretrainingExperiment:
             config=self.config.__dict__,
             polynomial_stats=polynomial_stats,
         )
+
     def evaluate(
         self,
         model: torch.nn.Module,
