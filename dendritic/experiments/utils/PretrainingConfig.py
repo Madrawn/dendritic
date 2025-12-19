@@ -6,6 +6,7 @@ class CohortSchedulerConfig:
     """Parameters for the optional CohortLRScheduler."""
     min_mult: float = 0.5          # Minimum multiplier for LR scaling
     max_mult: float = 1.0          # Maximum multiplier for LR scaling
+    sharpness: float = 1.0         # Sharpness of the cosine peak (higher = narrower high LR band)
     device: str = "cpu"            # Device for scheduler tensors
     apply_to_gradients: bool = True  # Whether to modify gradients (default current behavior)
 
