@@ -2,7 +2,7 @@ import os
 import logging
 import torch
 import torch.nn as nn
-from typing import Literal, Optional, List, Union, Dict, Any, Tuple, Set, Type, cast
+from typing import Literal, Optional, Union, Dict, Any, Tuple, Set, Type, cast
 import torch
 from torch import Tensor
 from dataclasses import dataclass
@@ -53,7 +53,7 @@ def _get_conv1d_class() -> Optional[Type]:
 def _validate_enhancement_params(
     model: nn.Module,
     poly_rank: Union[int, Literal["auto"]],
-    target_layers: Optional[List[str]]
+    target_layers: Optional[list[str]]
 ) -> None:
     """Validate enhancement parameters."""
     if not isinstance(model, nn.Module):
@@ -72,7 +72,7 @@ def _validate_enhancement_params(
 def _should_convert_layer(
     name: str,
     module: nn.Module,
-    target_layers: Optional[List[str]],
+    target_layers: Optional[list[str]],
     conv1d_class: Optional[Type]
 ) -> bool:
     """Determine if a layer should be converted to dendritic."""
@@ -112,13 +112,7 @@ def _create_dendritic_layer(
     Returns:
         Tuple of (dendritic_layer, effective_poly_rank)
     """
-    """
-    Create and initialize a dendritic layer with proper type handling.
-    
-    Returns:
-        Tuple of (dendritic_layer, effective_poly_rank)
-    """
-    """Create and initialize a dendritic layer."""
+
     # Get input/output dimensions with proper type handling
     if is_conv1d:
         # For Conv1D, we need to access weight directly
@@ -195,9 +189,9 @@ def _initialize_dendritic_layer(
                     if hasattr(dendritic, layer_attr):
                         layer = getattr(dendritic, layer_attr)
                         if hasattr(layer, "scale"):
-                            layer.scale.fill_(0.0)
+                            layer.scale.fill_(init_scale)
                         if hasattr(layer, "diag_scale"):
-                            layer.diag_scale.fill_(0.0)
+                            layer.diag_scale.fill_(init_scale)
         else:
             # For standard DendriticLayer
             if hasattr(dendritic, "linear") and hasattr(original_module, "weight"):
@@ -260,7 +254,7 @@ def _get_module_parent_and_name(model: nn.Module, full_name: str) -> Tuple[nn.Mo
     return parent, child_name
 
 
-def _log_conversion_statistics(conversions: List[LayerConversionStats]) -> None:
+def _log_conversion_statistics(conversions: list[LayerConversionStats]) -> None:
     """Log detailed statistics about the conversion process."""
     if not conversions:
         return
@@ -291,7 +285,7 @@ def _log_conversion_statistics(conversions: List[LayerConversionStats]) -> None:
 
 def enhance_model_with_dendritic(
     model: nn.Module,
-    target_layers: Optional[List[str]] = None,
+    target_layers: Optional[list[str]] = None,
     poly_rank: Union[int, Literal["auto"]] = "auto",
     init_scale: float = 1e-6,
     freeze_linear: bool = True,
@@ -305,7 +299,7 @@ def enhance_model_with_dendritic(
 
     Args:
         model: PyTorch model to enhance
-        target_layers: List of layer name patterns to replace
+        target_layers: list of layer name patterns to replace
         poly_rank: 'auto' for input_dim//16, or integer for fixed rank
         init_scale: Initial scale for polynomial pathway
         freeze_linear: Whether to freeze the pretrained linear weights
@@ -331,9 +325,9 @@ def enhance_model_with_dendritic(
     dendritic_kwargs = dendritic_kwargs or {}
     conv1d_class = _get_conv1d_class()
     device = next(model.parameters()).device
-    conversions: List[LayerConversionStats] = []
-    replacements: List[Tuple[nn.Module, str, nn.Module]] = []
-    dendritic_param_ids: Set[int] = set()
+    conversions: list[LayerConversionStats] = []
+    replacements: list[tuple[nn.Module, str, nn.Module]] = []
+    dendritic_param_ids: set[int] = set()
 
     # Freeze all parameters first
     for param in model.parameters():
