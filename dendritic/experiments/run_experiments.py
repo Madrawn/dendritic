@@ -21,7 +21,9 @@ import numpy as np
 
 # Third‑party imports
 import torch
-torch.set_float32_matmul_precision('high')
+torch.backends.cuda.matmul.fp32_precision = 'ieee'
+# torch.set_float32_matmul_precision('medium')
+# torch.set_float32_matmul_precision('high')
 from torch.utils.data import DataLoader
 from transformers.models.gpt2 import GPT2Tokenizer
 
@@ -675,6 +677,7 @@ def _train_config_with_models(
                     lr=experiment.config.learning_rate,  # type: ignore
                     weight_decay=experiment.config.weight_decay,  # type: ignore
                     betas=(0.9, 0.95),
+                    fused=True
                 ),
             )
         )
