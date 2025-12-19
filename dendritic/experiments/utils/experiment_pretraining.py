@@ -188,27 +188,23 @@ class PretrainingExperiment:
 
     def prefetching_cycle(self, dataloader, device):
         """
-        Prefetch next batch while GPU is computing.
-        Yields (input_ids, labels) directly on device.
+        Robust prefetching generator (Windows-Safe).
+        Manages the iterator directly to avoid closure/pickle issues.
         """
-        # Create a separate stream for data transfer to overlap with compute
-        stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+        use_cuda = torch.cuda.is_available() and device.startswith("cuda")
+        stream = torch.cuda.Stream() if use_cuda else None
 
-        def cycle_inner():
+        # Initialize iterator
+        iterator = iter(dataloader)
+
+        # 1. Prime the pump (Fetch first batch)
+        try:
+            next_batch = next(iterator)
+        except StopIteration:
             iterator = iter(dataloader)
-            while True:
-                try:
-                    yield next(iterator)
-                except StopIteration:
-                    iterator = iter(dataloader)
-                    yield next(iterator)
+            next_batch = next(iterator)
 
-        batch_iter = cycle_inner()
-
-        # Initial prefetch
-        next_batch = next(batch_iter)
-
-        # Non-blocking transfer for the first batch
+        # 2. Initial Async Transfer
         if stream:
             with torch.cuda.stream(stream):
                 next_input = next_batch["input_ids"].to(device, non_blocking=True)
@@ -218,18 +214,23 @@ class PretrainingExperiment:
             next_labels = next_batch["labels"].to(device)
 
         while True:
-            # 1. Sync: Ensure the PREVIOUS prefetch is done before using the data
+            # 3. Synchronization: Wait for the PREVIOUS prefetch to finish
             if stream:
                 torch.cuda.current_stream().wait_stream(stream)
 
-            # 2. Hand over the data to the training loop
+            # Data is now ready to use
             current_input, current_labels = next_input, next_labels
 
-            # 3. CPU Work: Fetch the NEXT batch from the iterator (Main CPU thread work)
-            #    We do this *before* dispatching GPU work to minimize gaps.
-            next_batch = next(batch_iter)
+            # 4. CPU Work: Fetch NEXT batch while GPU computes on 'current_input'
+            #    We handle StopIteration explicitly here to safely reset workers.
+            try:
+                next_batch = next(iterator)
+            except StopIteration:
+                # Windows Fix: Ensure clean reset
+                iterator = iter(dataloader)
+                next_batch = next(iterator)
 
-            # 4. GPU Dispatch: Start moving NEXT batch asynchronously
+            # 5. GPU Dispatch: Start moving NEXT batch
             if stream:
                 with torch.cuda.stream(stream):
                     next_input = next_batch["input_ids"].to(device, non_blocking=True)
@@ -238,7 +239,7 @@ class PretrainingExperiment:
                 next_input = next_batch["input_ids"].to(device)
                 next_labels = next_batch["labels"].to(device)
 
-            # 5. Yield current batch (While loop runs training, step 4 is happening on Stream 2)
+            # 6. Yield current batch to training loop
             yield current_input, current_labels
 
     def train_single_run(
@@ -251,7 +252,7 @@ class PretrainingExperiment:
         device: str,
         optimizer: torch.optim.Optimizer,
     ) -> TrainingResult:
-        """Train a single model (Fixed: Seeding, Scaler, and Cohort Scheduler)."""
+        """Train a single model (Fixed: Windows Safe, Scaler, Seeding)."""
 
         # ========== 1. CUDA & PRECISION SETUP ==========
         use_cuda = torch.cuda.is_available() and device.startswith("cuda")
@@ -301,13 +302,12 @@ class PretrainingExperiment:
             raise ValueError(f"Unknown scheduler type: {self.config.scheduler_type}")
 
         # ========== 4. AMP & SCALER ==========
-        # Check support but keep scaler ENABLED for safety (prevents PPL explosion)
+        # Enable scaler for safety (prevents PPL explosion)
         bf16_supported = use_cuda and torch.cuda.is_bf16_supported()
         amp_dtype = torch.bfloat16 if bf16_supported else torch.float16
         scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
 
         # ========== 5. COHORT SCHEDULER ==========
-        # (Restored)
         if self.config.cohort_scheduler is not None:
             cohort_scheduler = self._create_cohort_scheduler(
                 self.config.cohort_scheduler, device
@@ -315,13 +315,14 @@ class PretrainingExperiment:
         else:
             cohort_scheduler = None
 
-        # ========== 6. SEEDING & DATA ITERATOR (Fixes Divergence) ==========
+        # ========== 6. SEEDING & DATA ITERATOR ==========
         # Seed MUST happen here, after compilation, before iterator creation
         torch.manual_seed(seed)
         np.random.seed(seed)
         if use_cuda:
             torch.cuda.manual_seed_all(seed)
 
+        # Use the robust prefetcher
         train_iter = self.prefetching_cycle(train_dataloader, device)
 
         # ========== 7. TRAINING STATE ==========
@@ -341,6 +342,7 @@ class PretrainingExperiment:
         model.train()
 
         for step in progress:
+            # Robust fetch (handles Windows iterator reset internally)
             input_ids, labels = next(train_iter)
 
             # Forward
@@ -352,11 +354,10 @@ class PretrainingExperiment:
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
 
-            # --- CRITICAL: Unscale BEFORE manipulating gradients ---
-            # We must unscale here so cohort_scheduler and clipper see real gradients
+            # --- Unscale BEFORE manipulating gradients ---
             scaler.unscale_(optimizer)
 
-            # (Restored Cohort Logic)
+            # Cohort Logic
             if cohort_scheduler is not None:
                 cohort_scheduler.apply_to_gradients(model)
                 cohort_scheduler.step()
