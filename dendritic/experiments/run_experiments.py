@@ -8,48 +8,140 @@ Usage:
     python -m dendritic.experiments.run_experiments --experiment both
 """
 
+# Standard library imports
 import argparse
 import logging
+from math import exp
 import multiprocessing
-from datetime import datetime
 import os
-from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
-from experiment_finetuning import FinetuningConfig
+from datetime import datetime
+from pathlib import Path
+import random
+import numpy as np
 
-os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
-from numpy import isin
+# Third‑party imports
 import torch
 from torch.utils.data import DataLoader
 from transformers.models.gpt2 import GPT2Tokenizer
 
+# Project‑specific imports
+from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
+from dendritic.experiments.utils.ExperimentResults import ExperimentResults
+from dendritic.experiments.utils.experiment_finetuning import (
+    FinetuningConfig,
+    FinetuningExperimentResults,
+    run_finetuning_experiment,
+)
 
-def setup_logging() -> logging.Logger:
+# Environment configuration
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
+
+# Logger instance
+logger = logging.getLogger(__name__)
+
+
+def set_random_seed(seed: int) -> None:
+    """Set seeds for reproducibility across random, NumPy, and PyTorch."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def setup_logging(log_level: int | None = None) -> logging.Logger:
     """Configure logging."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(f"experiment_{timestamp}.log"),
-        ],
+    logger = logging.getLogger(__name__)
+    # Remove any existing handlers to avoid duplicate logs
+    logger.handlers.clear()
+    logger.propagate = False
+    level = log_level if log_level is not None else logging.INFO
+    logger.setLevel(level)
+
+    # Stream handler
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(level)
+
+    # File handler
+    file_handler = logging.FileHandler(Path(f"experiment_{timestamp}.log"))
+    file_handler.setLevel(level)
+
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    stream_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(stream_handler)
+    logger.addHandler(file_handler)
+
+    return logger
+
+
+def debug_dataset_integrity(
+    dataset, tokenizer: GPT2Tokenizer, logger: logging.Logger
+) -> None:
+    """
+    Inspect a single batch from the dataset and log debugging information.
+    This replicates the previous print‑based debugging block but uses the
+    provided logger at DEBUG level.
+    """
+    # Create a temporary loader to grab one batch
+    debug_loader = DataLoader(dataset, batch_size=4)  # type: ignore
+    batch = next(iter(debug_loader))
+
+    inp = batch["input_ids"]
+    lbl = batch["labels"]
+    pad_id = tokenizer.pad_token_id
+
+    # 1. Check Ratio of Padding
+    total_tokens = inp.numel()
+    pad_tokens = (inp == pad_id).sum().item()
+    logger.debug(f"Batch Shape: {inp.shape}")
+    logger.debug(f"Pad Token ID: {pad_id}")
+    logger.debug(
+        f"Padding Ratio: {pad_tokens / total_tokens:.2%} ({pad_tokens}/{total_tokens} tokens)"
     )
-    return logging.getLogger(__name__)
+
+    # 2. Check Masking (Crucial for correct PPL)
+    masked_tokens = (lbl == -100).sum().item()
+    logger.debug(f"Masked Label Ratio (-100): {masked_tokens / total_tokens:.2%}")
+
+    # 3. Visual Inspection
+    logger.debug("-" * 20 + " Sample 0 (Decoded) " + "-" * 20)
+    logger.debug("".join(tokenizer.decode(inp[0])))
+    logger.debug("-" * 20 + " Sample 0 (Raw IDs) " + "-" * 20)
+    logger.debug(inp[0].tolist())
+    logger.debug("-" * 20 + " Sample 0 (Labels) " + "-" * 20)
+    logger.debug(lbl[0].tolist())
+    logger.debug("!" * 40 + "\n")
 
 
 def load_pretraining_data(
     tokenizer: GPT2Tokenizer,
     config: PretrainingConfig,
     max_length: int = 256,
-):
-    """
-    Load data for pretraining experiment.
+    num_workers: int | None = None,
+) -> tuple[DataLoader, DataLoader]:
+    """Load and preprocess the WikiText-103 dataset for pretraining.
 
-    You can use datasets like:
-    - TinyStories (small, fast)
-    - OpenWebText subset
-    - WikiText
+    Parameters
+    ----------
+    tokenizer : GPT2Tokenizer
+        Tokenizer to use for text tokenization.
+    config : PretrainingConfig
+        Configuration object containing training parameters.
+    max_length : int, optional
+        Maximum sequence length for tokenization. Defaults to 256.
+    num_workers : int | None, optional
+        Number of worker processes for dataset mapping. If ``None`` the value
+        defaults to half the CPU cores (minimum 1).
+
+    Returns
+    -------
+    tuple[DataLoader, DataLoader]
+        Training and evaluation DataLoaders.
     """
+
     from datasets import load_dataset, Dataset
 
     # Compute required samples: steps * batch_size * epochs (safety margin +10%)
@@ -58,16 +150,20 @@ def load_pretraining_data(
     )  # compensate for packing
     num_eval_samples = int(num_train_samples * 0.1)
 
-    print(
+    logger.info(
         f"Loading {num_train_samples:,} train + {num_eval_samples:,} eval samples "
         f"(target: {config.training_steps * config.batch_size:,} batches)"
     )
-    print(f"Loading WikiText-103 (Top {num_train_samples} samples)...")
+    logger.info(f"Loading WikiText-103 (Top {num_train_samples} samples)...")
 
     # We load the full split first, then filter/select
     # This ensures we don't count empty lines as 'samples'
-    full_train = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
-    full_eval = load_dataset("wikitext", "wikitext-103-raw-v1", split="validation")
+    try:
+        full_train = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
+        full_eval = load_dataset("wikitext", "wikitext-103-raw-v1", split="validation")
+    except Exception as e:
+        logger.error(f"Failed to load WikiText-103 dataset: {e}")
+        raise
 
     assert isinstance(full_train, Dataset)
     assert isinstance(full_eval, Dataset)
@@ -81,10 +177,10 @@ def load_pretraining_data(
     # For Train: Ensure we have enough, or warn the user
     actual_train_len = len(train_filtered)
     if actual_train_len < num_train_samples:
-        print(
+        logger.warning(
             f"WARNING: Requested {num_train_samples} train samples, but only {actual_train_len} available."
         )
-        print("Training will run for fewer steps or cycle data.")
+        logger.info("Training will run for fewer steps or cycle data.")
 
     train_dataset = train_filtered.select(
         range(min(num_train_samples, actual_train_len))
@@ -112,7 +208,14 @@ def load_pretraining_data(
         texts = [t + "\n" for t in examples["text"]]
         return tokenizer(texts)
 
-    num_cores = multiprocessing.cpu_count() // 2 or 1
+    # Number of parallel processes for dataset mapping – will be overridden by CLI if provided
+    # Determine number of worker processes for dataset mapping.
+    # If the caller provides a value (e.g., via CLI), use it; otherwise fall back to half the CPU cores (minimum 1).
+    num_cores = (
+        num_workers
+        if num_workers is not None
+        else (multiprocessing.cpu_count() // 2 or 1)
+    )
 
     # 1. Tokenize without padding first
     train_ds = train_dataset.map(
@@ -162,45 +265,31 @@ def load_pretraining_data(
     train_dataset.set_format("torch")
     eval_dataset.set_format("torch")
     # ========================== DEBUGGING BLOCK START ============================
-    print("\n" + "!" * 40)
-    print("DEBUG: INSPECTING DATASET INTEGRITY")
+    # (Removed inline definition; using module-level helper)
+    if logger.isEnabledFor(logging.DEBUG):
+        debug_dataset_integrity(train_dataset, tokenizer, logger)
 
     # Create a temporary loader to grab one batch
-    debug_loader = DataLoader(train_dataset, batch_size=4)  # type: ignore
-    batch = next(iter(debug_loader))
+    # (moved into debug_dataset_integrity)
 
-    inp = batch["input_ids"]
-    lbl = batch["labels"]
-    pad_id = tokenizer.pad_token_id
+    # (moved into debug_dataset_integrity)
 
     # 1. Check Ratio of Padding
-    total_tokens = inp.numel()
-    pad_tokens = (inp == pad_id).sum().item()
-    print(f"Batch Shape: {inp.shape}")
-    print(f"Pad Token ID: {pad_id}")
-    print(
-        f"Padding Ratio: {pad_tokens / total_tokens:.2%} ({pad_tokens}/{total_tokens} tokens)"
-    )
+    # (moved into debug_dataset_integrity)
 
     # 2. Check Masking (Crucial for correct PPL)
     # In PyTorch CrossEntropyLoss, -100 is ignored. If this is 0%, your PPL is fake.
-    masked_tokens = (lbl == -100).sum().item()
-    print(f"Masked Label Ratio (-100): {masked_tokens / total_tokens:.2%}")
+    # (moved into debug_dataset_integrity)
 
     # 3. Visual Inspection
-    print("-" * 20 + " Sample 0 (Decoded) " + "-" * 20)
-    print("".join(tokenizer.decode(inp[0])))
-    print("-" * 20 + " Sample 0 (Raw IDs) " + "-" * 20)
-    print(inp[0].tolist())
-    print("-" * 20 + " Sample 0 (Labels) " + "-" * 20)
-    print(lbl[0].tolist())
-    print("!" * 40 + "\n")
+    # (moved into debug_dataset_integrity)
+    # (moved into debug_dataset_integrity)
     # ========================== DEBUGGING BLOCK END ============================
     train_dataloader = DataLoader(
         train_dataset,  # type: ignore
         batch_size=config.batch_size,
         shuffle=True,
-        num_workers=4,  # Use background processes to load data
+        num_workers=num_cores,  # Use background processes to load data
         pin_memory=True,  # Speeds up CPU-to-GPU transfer
         persistent_workers=True,  # Keeps workers alive, avoids re-initialization overhead
     )
@@ -215,14 +304,38 @@ def load_pretraining_data(
 
     return train_dataloader, eval_dataloader
 
+# Helper to create a human‑readable identifier for a config variant
+def _variant_identifier(cfg: PretrainingConfig) -> str:
+    """Generate a concise identifier based on the cohort scheduler configuration."""
+    if cfg.cohort_scheduler is None:
+        return "no_scheduler"
+    cs = cfg.cohort_scheduler
+    return f"min{cs.min_mult}_max{cs.max_mult}"
+
 
 def load_finetuning_data(
-    tokenizer: GPT2Tokenizer, max_length: int = 256, batch_size: int = 4
-):
-    """
-    Load data for finetuning experiment.
+    tokenizer: GPT2Tokenizer,
+    max_length: int = 256,
+    batch_size: int = 4,
+    num_workers: int | None = None,
+) -> tuple[DataLoader, DataLoader]:
+    """Load finetuning data using either the PythonAlpacaHandler or a fallback dataset.
 
-    Uses your PythonAlpacaHandler or similar.
+    Parameters
+    ----------
+    tokenizer : GPT2Tokenizer
+        Tokenizer to use for text tokenization.
+    max_length : int, optional
+        Maximum sequence length for tokenization. Defaults to 256.
+    batch_size : int, optional
+        Batch size for the DataLoaders. Defaults to 4.
+    num_workers : int | None, optional
+        Number of worker processes for DataLoader. If ``None`` defaults to 0.
+
+    Returns
+    -------
+    tuple[DataLoader, DataLoader]
+        Training and evaluation DataLoaders.
     """
     # Try to use your handler, fall back to a simple alternative
     try:
@@ -232,10 +345,16 @@ def load_finetuning_data(
         prepared = handler.prepare_data(test_size=0.1)
 
         train_dataloader = DataLoader(
-            prepared["train"], batch_size=batch_size, shuffle=True
+            prepared["train"],
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers if num_workers is not None else 0,
         )
         eval_dataloader = DataLoader(
-            prepared["eval"], batch_size=batch_size, shuffle=False
+            prepared["eval"],
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers if num_workers is not None else 0,
         )
     except ImportError:
         # Fallback: use a code dataset from HuggingFace
@@ -269,46 +388,145 @@ def load_finetuning_data(
         split = dataset.train_test_split(test_size=0.1)
 
         train_dataloader = DataLoader(
-            split["train"], batch_size=batch_size, shuffle=True  # type: ignore
+            split["train"],  # type: ignore
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers if num_workers is not None else 0,
         )
         eval_dataloader = DataLoader(
-            split["test"], batch_size=batch_size, shuffle=False  # type: ignore
+            split["test"],  # type: ignore
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers if num_workers is not None else 0,
         )
 
     return train_dataloader, eval_dataloader
 
 
-def run_pretraining_experiment(device: str):
-    """Run pretraining comparison experiment."""
-    from dendritic.experiments.utils.experiment_pretraining import (
-        run_pretraining_experiment as run_exp,
-    )
+def run_pretraining_experiment(
+    device: str,
+    num_workers: int | None = None,
+    scheduler_variants: list[PretrainingConfig] | None = None,
+) -> dict[str, ExperimentResults]:
+    """Run the pretraining experiment across configured seeds.
+
+    Parameters
+    ----------
+    device : str
+        Device identifier (e.g., ``'cuda'`` or ``'cpu'``).
+    num_workers : int | None, optional
+        Number of worker processes for data loading. If ``None`` the default
+        is derived from the CLI argument.
+
+    Returns
+    -------
+    ExperimentResults
+        Results of the pretraining experiment.
+    """
+    from dendritic.experiments.utils.experiment_pretraining import (PretrainingExperiment, ModelVariant)
 
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
 
     training_steps_count = 120000
-    config = PretrainingConfig(
+    # Base configuration (used when no variants are supplied)
+    base_config = PretrainingConfig(
         training_steps=training_steps_count,
         batch_size=16,
         eval_interval=min(max(training_steps_count // 20, 1), 500),
-        seeds=[42],  # Use fewer seeds for faster testing
+        seeds=[42],  # Use fewer seeds for faster testing,
         scheduler_type="plateau",
+        plateau_threshold=0.0001,
     )
+    # Determine which configs to run
+    variants = scheduler_variants or [base_config]
 
-    train_dl, eval_dl = load_pretraining_data(
-        tokenizer,
-        config,
-        max_length=config.max_seq_len,
-    )
+    results_by_variant: dict[str, ExperimentResults] = {}
 
-    results = run_exp(train_dl, eval_dl, config, device)
-    return results
+    for cfg in variants:
+        experiment = PretrainingExperiment(config=cfg)
+        logger.info(f"Pretraining config: {cfg}")
+
+        train_dl, eval_dl = load_pretraining_data(
+            tokenizer,
+            cfg,
+            max_length=cfg.max_seq_len,
+            num_workers=num_workers,
+        )
+
+        # Create fresh models for each seed
+        baseline_model, dendritic_model, stack_model, baseline_wave_model = (
+            experiment.create_models()
+        )
+
+        # Define model variants (baseline and baseline_wave)
+        model_variants = [
+            ModelVariant(
+                name="baseline",
+                model=baseline_model,
+                results=[],
+                optimizer=torch.optim.AdamW(
+                    baseline_model.parameters(),
+                    lr=experiment.config.learning_rate,  # type: ignore
+                    weight_decay=experiment.config.weight_decay,  # type: ignore
+                    betas=(0.9, 0.95),
+                ),
+            ),
+            ModelVariant(
+                name="baseline_wave",
+                model=baseline_wave_model,
+                results=[],
+                optimizer=torch.optim.AdamW(
+                    baseline_wave_model.parameters(),
+                    lr=experiment.config.learning_rate,  # type: ignore
+                    weight_decay=experiment.config.weight_decay,  # type: ignore
+                    betas=(0.9, 0.95),
+                ),
+            ),
+        ]
+
+        try:
+            # Ensure deterministic behavior for each seed
+            results: ExperimentResults | None = None
+            for seed in experiment.config.seeds:
+                set_random_seed(seed)
+                results = experiment.run(
+                    train_dl, eval_dl, model_variants=model_variants, device=device
+                )
+        finally:
+            # Ensure GPU memory is freed even on error
+            torch.cuda.empty_cache()
+        if results is None:
+            raise RuntimeError("Pretraining experiment failed without returning results")
+
+        # After running all seeds for this variant, store the result
+        variant_id = _variant_identifier(cfg)
+        results_by_variant[variant_id] = results
+
+    return results_by_variant
 
 
-def run_finetuning_experiment(device: str):
-    """Run finetuning comparison experiment."""
+def run_finetuning_experiment_wrapper(
+    device: str, num_workers: int | None = None
+) -> FinetuningExperimentResults:
+    """Run the finetuning experiment across configured seeds.
 
+    Parameters
+    ----------
+    device : str
+        Device identifier (e.g., ``'cuda'`` or ``'cpu'``).
+    num_workers : int | None, optional
+        Number of worker processes for data loading. If ``None`` the default
+        is derived from the CLI argument.
+
+    Returns
+    -------
+    FinetuningExperimentResults
+        Results of the finetuning experiment.
+    """
+
+    # Ensure deterministic behavior
+    set_random_seed(42)
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -317,14 +535,32 @@ def run_finetuning_experiment(device: str):
     )
 
     train_dl, eval_dl = load_finetuning_data(
-        tokenizer, max_length=config.max_length, batch_size=config.batch_size
+        tokenizer,
+        max_length=config.max_length,
+        batch_size=config.batch_size,
+        num_workers=num_workers,
     )
 
-    results = run_finetuning_experiment(device)
+    from dendritic.experiments.utils.experiment_finetuning import (
+        run_finetuning_experiment as run_finetuning_exp,
+    )
+
+    results: FinetuningExperimentResults | None = None
+    try:
+        results = run_finetuning_exp(train_dl, eval_dl, config, device)
+    finally:
+        torch.cuda.empty_cache()
+    if results is None:
+        raise RuntimeError("Finetuning experiment failed without returning results")
     return results
 
 
-def main():
+def main() -> None:
+    """Entry point for the experiment runner.
+
+    Parses command‑line arguments, configures logging, and dispatches
+    the requested experiments (pretraining, finetuning, or both).
+    """
     parser = argparse.ArgumentParser(description="Run dendritic layer experiments")
     parser.add_argument(
         "--experiment",
@@ -339,9 +575,30 @@ def main():
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to use",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Logging level (default: INFO)",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=max(multiprocessing.cpu_count() // 2, 1),
+        help="Number of worker processes for data loading (default: half of CPU cores, at least 1)",
+    )
 
     args = parser.parse_args()
-    logger = setup_logging()
+    # Map textual log level to logging constant; default to INFO if not provided
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    logger = setup_logging(log_level=log_level_map.get(args.log_level))
 
     logger.info(f"Running experiment(s): {args.experiment}")
     logger.info(f"Device: {args.device}")
@@ -350,13 +607,13 @@ def main():
         logger.info("\n" + "=" * 70)
         logger.info("RUNNING PRETRAINING EXPERIMENT")
         logger.info("=" * 70)
-        run_pretraining_experiment(args.device)
+        run_pretraining_experiment(args.device, args.num_workers)
 
     if args.experiment in ["finetuning", "both"]:
         logger.info("\n" + "=" * 70)
         logger.info("RUNNING FINETUNING EXPERIMENT")
         logger.info("=" * 70)
-        run_finetuning_experiment(args.device)
+        run_finetuning_experiment_wrapper(args.device, args.num_workers)
 
     logger.info("\nAll experiments complete!")
 
