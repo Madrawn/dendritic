@@ -266,14 +266,15 @@ class PretrainingExperiment:
 
         # ========== 2. COMPILATION ==========
         # Windows -> default, Linux -> reduce-overhead
-        compile_mode = "default" if os.name == "nt" else "reduce-overhead"
-        try:
-            logging.info(f"Compiling model with mode='{compile_mode}'...")
-            model = torch.compile(model, mode=compile_mode)
-        except Exception as e:
-            logging.warning(f"Compilation failed: {e}. Falling back to eager.")
-            if hasattr(model, "_orig_mod"):
-                model = model._orig_mod
+        if device.startswith("cuda"):
+            compile_mode = "default" if os.name == "nt" else "reduce-overhead"
+            try:
+                logging.info(f"Compiling model with mode='{compile_mode}'...")
+                model = torch.compile(model, mode=compile_mode)
+            except Exception as e:
+                logging.warning(f"Compilation failed: {e}. Falling back to eager.")
+                if hasattr(model, "_orig_mod"):
+                    model = model._orig_mod
 
         # ========== 3. SCHEDULER ==========
         warmup_steps = int(self.config.warmup_steps)

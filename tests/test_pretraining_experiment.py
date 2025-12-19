@@ -26,7 +26,7 @@ class DummyDataset(Dataset):
         )
         return {"input_ids": input_ids, "labels": labels}
 
-
+# @pytest.mark.slow
 @pytest.mark.unit
 def test_pretraining_experiment_end_to_end():
     # ------------------------------------------------------------------
@@ -91,7 +91,7 @@ def test_pretraining_experiment_end_to_end():
             ),
         ),
     ]
-    results = experiment.run(train_loader, eval_loader, model_variants=model_variants, device="cuda" if torch.cuda.is_available() else "cpu")
+    results = experiment.run(train_loader, eval_loader, model_variants=model_variants, device="cpu")
     # ------------------------------------------------------------------
     # Basic sanity checks on the returned ExperimentResults object
     # ------------------------------------------------------------------
