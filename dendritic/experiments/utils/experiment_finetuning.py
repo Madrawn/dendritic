@@ -158,7 +158,8 @@ def calculate_matching_lora_rank(
 
 def setup_dendritic_model(
     config: FinetuningConfig,
-    device: str
+    device: str,
+    freeze_linear: bool = True,
 ) -> GPT2LMHeadModel:
     """Set up GPT-2 with dendritic enhancement."""
     from dendritic.enhancement import enhance_model_with_dendritic
@@ -170,12 +171,12 @@ def setup_dendritic_model(
         model,
         target_layers=config.target_layers,
         poly_rank=config.poly_rank,
-        freeze_linear=True,
+        freeze_linear=freeze_linear,
         verbose=False,
         dendritic_cls=DendriticStack,
     )
     
-    return enhanced_model.to(device) # type: ignore
+    return enhanced_model.to(device)  # type: ignore
 
 
 def setup_dendritic_stack_model(
