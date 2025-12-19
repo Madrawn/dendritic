@@ -15,6 +15,7 @@ from dendritic.experiments.run_experiments import (
 )
 
 
+@pytest.mark.unit
 def test_setup_logging_creates_file_handler(tmp_path, caplog):
     """Verify that `setup_logging` creates a logger with a FileHandler."""
     # Change working directory to a temporary path so the log file is created there
@@ -39,6 +40,7 @@ def test_setup_logging_creates_file_handler(tmp_path, caplog):
         os.chdir(original_cwd)
 
 
+@pytest.mark.unit
 def test_load_finetuning_data_fallback(monkeypatch):
     """Force the fallback path and verify DataLoaders are returned."""
     # Monkey‑patch the import mechanism to raise ImportError for the handler
@@ -68,6 +70,7 @@ def test_load_finetuning_data_fallback(monkeypatch):
     assert batch["input_ids"].shape[0] == 2
 
 
+@pytest.mark.unit
 def test_debug_dataset_integrity_logs(caplog):
     """Run the debug helper on a tiny synthetic dataset and verify logging output."""
     from torch.utils.data import TensorDataset

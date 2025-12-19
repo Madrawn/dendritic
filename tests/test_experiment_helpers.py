@@ -2,6 +2,7 @@ import random
 import numpy as np
 import torch
 import logging
+import pytest
 from pathlib import Path
 
 from dendritic.experiments.run_experiments import (
@@ -9,6 +10,7 @@ from dendritic.experiments.run_experiments import (
     debug_dataset_integrity,  # type: ignore
 )
 
+@pytest.mark.unit
 def test_set_random_seed_reproducibility():
     """Ensure that setting the same seed yields identical random numbers across libraries."""
     seed = 12345
@@ -25,6 +27,7 @@ def test_set_random_seed_reproducibility():
     assert np.random.rand() == np_rand
     assert torch.rand(1).item() == torch_rand
 
+@pytest.mark.unit
 def test_debug_dataset_integrity_logs(caplog):
     """Run the debug helper on a tiny synthetic dataset and verify logging output."""
     from torch.utils.data import DataLoader, TensorDataset

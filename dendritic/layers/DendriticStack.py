@@ -107,6 +107,19 @@ class DendriticStack(nn.Module):
         bias: bool = True,
     ):
         super().__init__()
+        # Store dimensions for introspection
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.poly_rank = poly_rank
+        self.poly_degree = poly_degree
+        self.independent_inputs = independent_inputs
+        self.init_scale = init_scale
+        self.bias = bias
+        
+        # Validate diag_rank
+        if diag_rank is not None and diag_rank != "auto" and diag_rank < 0:
+            raise ValueError(f"diag_rank must be non-negative, got {diag_rank}")
+        
         # Linear pathway (preserved for initialization from pretrained)
         self.linear = nn.Linear(input_dim, output_dim, bias=bias)
         

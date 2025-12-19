@@ -91,8 +91,7 @@ def test_pretraining_experiment_end_to_end():
             ),
         ),
     ]
-    results = experiment.run(train_loader, eval_loader, model_variants=model_variants, device="cpu")
-
+    results = experiment.run(train_loader, eval_loader, model_variants=model_variants, device="cuda" if torch.cuda.is_available() else "cpu")
     # ------------------------------------------------------------------
     # Basic sanity checks on the returned ExperimentResults object
     # ------------------------------------------------------------------
