@@ -21,6 +21,7 @@ import numpy as np
 
 # Third‑party imports
 import torch
+torch.set_float32_matmul_precision('high')
 from torch.utils.data import DataLoader
 from transformers.models.gpt2 import GPT2Tokenizer
 
@@ -38,6 +39,213 @@ os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
 
 # Logger instance
 logger = logging.getLogger(__name__)
+
+
+def run_pretraining_experiment(
+    device: str,
+    num_workers: int | None = None,
+    scheduler_variants: list[PretrainingConfig] | None = None,
+    param_grid: dict | None = None,
+) -> dict[str, ExperimentResults]:
+    """Run the pretraining experiment across configured seeds.
+
+    Parameters
+    ----------
+    device : str
+        Device identifier (e.g., ``'cuda'`` or ``'cpu'``).
+    num_workers : int | None, optional
+        Number of worker processes for data loading. If ``None`` the default
+        is derived from the CLI argument.
+    scheduler_variants : list[PretrainingConfig] | None, optional
+        List of configuration variants to run. If None, a single default config is used.
+    param_grid : dict | None, optional
+        Mapping of CohortSchedulerConfig field names to lists of values to sweep over.
+        If provided, generates scheduler_variants via Cartesian product.
+        Example: {"min_mult": [0.4, 0.5], "sharpness": [1.0, 2.0]}
+
+    Returns
+    -------
+    dict[str, ExperimentResults]
+        Mapping from variant identifier to experiment results.
+    """
+    from dendritic.experiments.utils.experiment_pretraining import (PretrainingExperiment, ModelVariant)
+    from dendritic.experiments.utils.sweep import generate_scheduler_variants
+
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    training_steps_count = 6000
+    # Base configuration (used when no variants are supplied)
+    base_config = PretrainingConfig(
+        training_steps=training_steps_count,
+        batch_size=20,
+        eval_interval=min(max(training_steps_count // 20, 1), 500),
+        seeds=[42],  # Use fewer seeds for faster testing,
+        scheduler_type="cosine",
+        plateau_threshold=0.001,
+    )
+    # Determine which configs to run
+    if param_grid is not None:
+        variants = generate_scheduler_variants(base_config, param_grid)
+    elif scheduler_variants is not None:
+        variants = scheduler_variants
+    else:
+        variants = [base_config]
+
+    results_by_variant: dict[str, ExperimentResults] = {}
+
+    # Separate baseline config (cohort_scheduler = None) from scheduler variants
+    baseline_config = base_config
+    scheduler_variants_list = [cfg for cfg in variants if cfg.cohort_scheduler is not None]
+    
+    if len(scheduler_variants_list) == 0:
+        # No scheduler variants: run the original experiment (baseline vs baseline_wave)
+        logger.info("Training no_scheduler variant (baseline vs baseline_wave)")
+        results = _train_config_with_models(
+            baseline_config, ["baseline", "baseline_wave"], device, num_workers, tokenizer
+        )
+        results_by_variant["no_scheduler"] = results
+    else:
+        # We have scheduler variants: run baseline once, then baseline_wave for each variant
+        if baseline_config.cohort_scheduler is None:
+            variant_id = _variant_identifier(baseline_config)
+            logger.info(f"Training baseline variant ({variant_id})")
+            baseline_results = _train_config_with_models(
+                baseline_config, ["baseline"], device, num_workers, tokenizer
+            )
+            results_by_variant["baseline"] = baseline_results
+
+        for cfg in scheduler_variants_list:
+            variant_id = _variant_identifier(cfg)
+            logger.info(f"Training variant: {variant_id}")
+            wave_results = _train_config_with_models(
+                cfg, ["baseline_wave"], device, num_workers, tokenizer
+            )
+            results_by_variant[variant_id] = wave_results
+
+    # Save consolidated results
+    from dendritic.experiments.analysis.analysis import (
+        save_consolidated_results,
+        print_consolidated_summary,
+    )
+    output_dir = Path(base_config.output_dir)
+    save_consolidated_results(results_by_variant, output_dir)
+    print_consolidated_summary(results_by_variant)
+
+    return results_by_variant
+
+
+def main() -> None:
+    """Entry point for the experiment runner.
+
+    Parses command‑line arguments, configures logging, and dispatches
+    the requested experiments (pretraining, finetuning, or both).
+    """
+    parser = argparse.ArgumentParser(description="Run dendritic layer experiments")
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        choices=["pretraining", "finetuning", "both"],
+        default="both",
+        help="Which experiment to run",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device to use",
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Logging level (default: INFO)",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=max(multiprocessing.cpu_count() // 2, 1),
+        help="Number of worker processes for data loading (default: half of CPU cores, at least 1)",
+    )
+
+    args = parser.parse_args()
+    # Map textual log level to logging constant; default to INFO if not provided
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    logger = setup_logging(log_level=log_level_map.get(args.log_level))
+
+    logger.info(f"Running experiment(s): {args.experiment}")
+    logger.info(f"Device: {args.device}")
+
+    if args.experiment in ["pretraining", "both"]:
+        logger.info("\n" + "=" * 70)
+        logger.info("RUNNING PRETRAINING EXPERIMENT")
+        logger.info("=" * 70)
+        param_grid = {"min_mult": [0.3, 0.5, 0.7], "sharpness": [1.0, 2.0, 3.0]}
+
+        run_pretraining_experiment(args.device, args.num_workers, param_grid=param_grid)
+
+    if args.experiment in ["finetuning", "both"]:
+        logger.info("\n" + "=" * 70)
+        logger.info("RUNNING FINETUNING EXPERIMENT")
+        logger.info("=" * 70)
+        run_finetuning_experiment_wrapper(args.device, args.num_workers)
+
+    logger.info("\nAll experiments complete!")
+
+def run_finetuning_experiment_wrapper(
+    device: str, num_workers: int | None = None
+) -> FinetuningExperimentResults:
+    """Run the finetuning experiment across configured seeds.
+
+    Parameters
+    ----------
+    device : str
+        Device identifier (e.g., ``'cuda'`` or ``'cpu'``).
+    num_workers : int | None, optional
+        Number of worker processes for data loading. If ``None`` the default
+        is derived from the CLI argument.
+
+    Returns
+    -------
+    FinetuningExperimentResults
+        Results of the finetuning experiment.
+    """
+
+    # Ensure deterministic behavior
+    set_random_seed(42)
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    config = FinetuningConfig(
+        training_steps=3000, batch_size=4, eval_interval=250, seeds=[42, 71, 123]
+    )
+
+    train_dl, eval_dl = load_finetuning_data(
+        tokenizer,
+        max_length=config.max_length,
+        batch_size=config.batch_size,
+        num_workers=num_workers,
+    )
+
+    from dendritic.experiments.utils.experiment_finetuning import (
+        run_finetuning_experiment as run_finetuning_exp,
+    )
+
+    results: FinetuningExperimentResults | None = None
+    try:
+        results = run_finetuning_exp(train_dl, eval_dl, config, device)
+    finally:
+        torch.cuda.empty_cache()
+    if results is None:
+        raise RuntimeError("Finetuning experiment failed without returning results")
+    return results
 
 
 def set_random_seed(seed: int) -> None:
@@ -73,6 +281,20 @@ def setup_logging(log_level: int | None = None) -> logging.Logger:
 
     logger.addHandler(stream_handler)
     logger.addHandler(file_handler)
+
+    # Ensure root logger also has a stream handler for modules that log via logging.info
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    # Remove existing stream handlers to avoid duplicates
+    root_stream_handlers = [h for h in root_logger.handlers if isinstance(h, logging.StreamHandler)]
+    for h in root_stream_handlers:
+        root_logger.removeHandler(h)
+    # Add a single stream handler if none exist
+    if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
+        root_stream_handler = logging.StreamHandler()
+        root_stream_handler.setLevel(level)
+        root_stream_handler.setFormatter(formatter)
+        root_logger.addHandler(root_stream_handler)
 
     return logger
 
@@ -310,7 +532,7 @@ def _variant_identifier(cfg: PretrainingConfig) -> str:
     if cfg.cohort_scheduler is None:
         return "no_scheduler"
     cs = cfg.cohort_scheduler
-    return f"min{cs.min_mult}_max{cs.max_mult}"
+    return f"min{cs.min_mult}_max{cs.max_mult}_sharp{cs.sharpness}"
 
 
 def load_finetuning_data(
@@ -403,219 +625,74 @@ def load_finetuning_data(
     return train_dataloader, eval_dataloader
 
 
-def run_pretraining_experiment(
+
+
+def _train_config_with_models(
+    config: PretrainingConfig,
+    model_names: list[str],
     device: str,
-    num_workers: int | None = None,
-    scheduler_variants: list[PretrainingConfig] | None = None,
-) -> dict[str, ExperimentResults]:
-    """Run the pretraining experiment across configured seeds.
+    num_workers: int | None,
+    tokenizer: GPT2Tokenizer,
+) -> ExperimentResults:
+    """Train specified models under a single configuration."""
+    from dendritic.experiments.utils.experiment_pretraining import PretrainingExperiment, ModelVariant
 
-    Parameters
-    ----------
-    device : str
-        Device identifier (e.g., ``'cuda'`` or ``'cpu'``).
-    num_workers : int | None, optional
-        Number of worker processes for data loading. If ``None`` the default
-        is derived from the CLI argument.
+    experiment = PretrainingExperiment(config=config)
+    logger.info(f"Pretraining config: {config}")
+    variant_id = _variant_identifier(config)
+    logger.info(f"Variant identifier: {variant_id}")
 
-    Returns
-    -------
-    ExperimentResults
-        Results of the pretraining experiment.
-    """
-    from dendritic.experiments.utils.experiment_pretraining import (PretrainingExperiment, ModelVariant)
-
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
-
-    training_steps_count = 120000
-    # Base configuration (used when no variants are supplied)
-    base_config = PretrainingConfig(
-        training_steps=training_steps_count,
-        batch_size=16,
-        eval_interval=min(max(training_steps_count // 20, 1), 500),
-        seeds=[42],  # Use fewer seeds for faster testing,
-        scheduler_type="plateau",
-        plateau_threshold=0.0001,
-    )
-    # Determine which configs to run
-    variants = scheduler_variants or [base_config]
-
-    results_by_variant: dict[str, ExperimentResults] = {}
-
-    for cfg in variants:
-        experiment = PretrainingExperiment(config=cfg)
-        logger.info(f"Pretraining config: {cfg}")
-
-        train_dl, eval_dl = load_pretraining_data(
-            tokenizer,
-            cfg,
-            max_length=cfg.max_seq_len,
-            num_workers=num_workers,
-        )
-
-        # Create fresh models for each seed
-        baseline_model, dendritic_model, stack_model, baseline_wave_model = (
-            experiment.create_models()
-        )
-
-        # Define model variants (baseline and baseline_wave)
-        model_variants = [
-            ModelVariant(
-                name="baseline",
-                model=baseline_model,
-                results=[],
-                optimizer=torch.optim.AdamW(
-                    baseline_model.parameters(),
-                    lr=experiment.config.learning_rate,  # type: ignore
-                    weight_decay=experiment.config.weight_decay,  # type: ignore
-                    betas=(0.9, 0.95),
-                ),
-            ),
-            ModelVariant(
-                name="baseline_wave",
-                model=baseline_wave_model,
-                results=[],
-                optimizer=torch.optim.AdamW(
-                    baseline_wave_model.parameters(),
-                    lr=experiment.config.learning_rate,  # type: ignore
-                    weight_decay=experiment.config.weight_decay,  # type: ignore
-                    betas=(0.9, 0.95),
-                ),
-            ),
-        ]
-
-        try:
-            # Ensure deterministic behavior for each seed
-            results: ExperimentResults | None = None
-            for seed in experiment.config.seeds:
-                set_random_seed(seed)
-                results = experiment.run(
-                    train_dl, eval_dl, model_variants=model_variants, device=device
-                )
-        finally:
-            # Ensure GPU memory is freed even on error
-            torch.cuda.empty_cache()
-        if results is None:
-            raise RuntimeError("Pretraining experiment failed without returning results")
-
-        # After running all seeds for this variant, store the result
-        variant_id = _variant_identifier(cfg)
-        results_by_variant[variant_id] = results
-
-    return results_by_variant
-
-
-def run_finetuning_experiment_wrapper(
-    device: str, num_workers: int | None = None
-) -> FinetuningExperimentResults:
-    """Run the finetuning experiment across configured seeds.
-
-    Parameters
-    ----------
-    device : str
-        Device identifier (e.g., ``'cuda'`` or ``'cpu'``).
-    num_workers : int | None, optional
-        Number of worker processes for data loading. If ``None`` the default
-        is derived from the CLI argument.
-
-    Returns
-    -------
-    FinetuningExperimentResults
-        Results of the finetuning experiment.
-    """
-
-    # Ensure deterministic behavior
-    set_random_seed(42)
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
-
-    config = FinetuningConfig(
-        training_steps=3000, batch_size=4, eval_interval=250, seeds=[42, 71, 123]
-    )
-
-    train_dl, eval_dl = load_finetuning_data(
+    train_dl, eval_dl = load_pretraining_data(
         tokenizer,
-        max_length=config.max_length,
-        batch_size=config.batch_size,
+        config,
+        max_length=config.max_seq_len,
         num_workers=num_workers,
     )
 
-    from dendritic.experiments.utils.experiment_finetuning import (
-        run_finetuning_experiment as run_finetuning_exp,
+    # Create fresh models for each seed
+    baseline_model, dendritic_model, stack_model, baseline_wave_model = (
+        experiment.create_models()
     )
 
-    results: FinetuningExperimentResults | None = None
+    # Map model names to actual model instances
+    model_map = {
+        "baseline": baseline_model,
+        "baseline_wave": baseline_wave_model,
+        "dendritic": dendritic_model,
+        "stack": stack_model,
+    }
+
+    model_variants = []
+    for name in model_names:
+        model = model_map[name]
+        model_variants.append(
+            ModelVariant(
+                name=name,
+                model=model,
+                results=[],
+                optimizer=torch.optim.AdamW(
+                    model.parameters(),
+                    lr=experiment.config.learning_rate,  # type: ignore
+                    weight_decay=experiment.config.weight_decay,  # type: ignore
+                    betas=(0.9, 0.95),
+                ),
+            )
+        )
+
     try:
-        results = run_finetuning_exp(train_dl, eval_dl, config, device)
+        # Ensure deterministic behavior for each seed
+        results: ExperimentResults | None = None
+        for seed in experiment.config.seeds:
+            set_random_seed(seed)
+            results = experiment.run(
+                train_dl, eval_dl, model_variants=model_variants, device=device
+            )
     finally:
+        # Ensure GPU memory is freed even on error
         torch.cuda.empty_cache()
     if results is None:
-        raise RuntimeError("Finetuning experiment failed without returning results")
+        raise RuntimeError("Pretraining experiment failed without returning results")
     return results
-
-
-def main() -> None:
-    """Entry point for the experiment runner.
-
-    Parses command‑line arguments, configures logging, and dispatches
-    the requested experiments (pretraining, finetuning, or both).
-    """
-    parser = argparse.ArgumentParser(description="Run dendritic layer experiments")
-    parser.add_argument(
-        "--experiment",
-        type=str,
-        choices=["pretraining", "finetuning", "both"],
-        default="both",
-        help="Which experiment to run",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device to use",
-    )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default="INFO",
-        help="Logging level (default: INFO)",
-    )
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=max(multiprocessing.cpu_count() // 2, 1),
-        help="Number of worker processes for data loading (default: half of CPU cores, at least 1)",
-    )
-
-    args = parser.parse_args()
-    # Map textual log level to logging constant; default to INFO if not provided
-    log_level_map = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR,
-        "CRITICAL": logging.CRITICAL,
-    }
-    logger = setup_logging(log_level=log_level_map.get(args.log_level))
-
-    logger.info(f"Running experiment(s): {args.experiment}")
-    logger.info(f"Device: {args.device}")
-
-    if args.experiment in ["pretraining", "both"]:
-        logger.info("\n" + "=" * 70)
-        logger.info("RUNNING PRETRAINING EXPERIMENT")
-        logger.info("=" * 70)
-        run_pretraining_experiment(args.device, args.num_workers)
-
-    if args.experiment in ["finetuning", "both"]:
-        logger.info("\n" + "=" * 70)
-        logger.info("RUNNING FINETUNING EXPERIMENT")
-        logger.info("=" * 70)
-        run_finetuning_experiment_wrapper(args.device, args.num_workers)
-
-    logger.info("\nAll experiments complete!")
 
 
 if __name__ == "__main__":

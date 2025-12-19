@@ -14,9 +14,13 @@ Key controls:
 """
 
 import logging
+import time
+from typing import cast
 import torch
+torch.set_float32_matmul_precision('high')
+
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dendritic.experiments.analysis.analysis import (
     analyze_results,
@@ -39,12 +43,18 @@ from .ExperimentResults import ExperimentResults
 from .custom_scaler import CohortLRScheduler
 from .param_utils import find_matching_hidden_dims
 
+logging.getLogger().setLevel(logging.INFO)
+
+
 @dataclass
 class ModelVariant:
     name: str
     model: torch.nn.Module
-    results: list
+
     optimizer: torch.optim.Optimizer
+    results: list = field(default_factory=list)
+
+
 # ----------------------------------------------------------------------
 # PretrainingExperiment class – encapsulates the pretraining workflow
 # ----------------------------------------------------------------------
@@ -83,6 +93,7 @@ class PretrainingExperiment:
         return CohortLRScheduler(
             min_mult=config.min_mult,
             max_mult=config.max_mult,
+            sharpness=config.sharpness,
             device=device,
         )
 
@@ -108,17 +119,16 @@ class PretrainingExperiment:
             **({} if poly_rank is None else {"poly_rank": poly_rank}),
         )
 
-# Remove duplicate _build_model (the class method is already defined)
-
-
-
+    # Remove duplicate _build_model (the class method is already defined)
 
     def create_models(self) -> tuple[MiniGPT, MiniGPT, MiniGPT, MiniGPT]:
         """
         Create baseline, dendritic, and stack models with matched parameters.
         Stores hidden dimensions on the instance for later use.
         """
-        baseline_hidden, dendritic_hidden, stack_hidden = find_matching_hidden_dims(self.config)
+        baseline_hidden, dendritic_hidden, stack_hidden = find_matching_hidden_dims(
+            self.config
+        )
 
         logging.info(f"Baseline hidden dim: {baseline_hidden}")
         logging.info(f"Dendritic hidden dim: {dendritic_hidden}")
@@ -174,7 +184,6 @@ class PretrainingExperiment:
 
         return baseline_model, dendritic_model, stack_model, baseline_wave_model
 
-
     def train_single_run(
         self,
         model: torch.nn.Module,
@@ -185,18 +194,23 @@ class PretrainingExperiment:
         device: str,
         optimizer: torch.optim.Optimizer,
     ) -> TrainingResult:
-        """Train a single model and return results."""
-        import time
+        """Train a single model and return results (Optimized & Clean Logs)."""
 
-        # Set seed for reproducibility
+        # Set seed
         torch.manual_seed(seed)
         np.random.seed(seed)
 
         model = model.to(device)
 
+        # Compile model (optional, safe wrap)
+        try:
+            model = cast(torch.nn.Module, torch.compile(model))
+        except Exception:
+            pass
+
         # Scheduler selection
         if self.config.scheduler_type == "cosine":
-            # Linear warmup then cosine decay
+
             def lr_lambda(step: int) -> float:
                 if step < self.config.warmup_steps:
                     return step / self.config.warmup_steps
@@ -207,7 +221,6 @@ class PretrainingExperiment:
 
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
         elif self.config.scheduler_type == "plateau":
-            # ReduceLROnPlateau scheduler
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
                 mode="min",
@@ -220,99 +233,135 @@ class PretrainingExperiment:
         else:
             raise ValueError(f"Unknown scheduler type: {self.config.scheduler_type}")
 
+        # FIX: Use new torch.amp API + ignore Pylance errors
+        use_amp = device.startswith("cuda")
+        # Pylance stubs are outdated for PyTorch 2.4+, so we ignore the export error
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)  # type: ignore
+
         # Training state
         best_eval_loss = float("inf")
         no_improvement_count = 0
-        early_stop_patience = self.config.plateau_patience * self.config.early_stop_multiplier
+        early_stop_patience = (
+            self.config.plateau_patience * self.config.early_stop_multiplier
+        )
         loss_history = []
-        train_iter = iter(train_dataloader)
+
+        def cycle(iterable):
+            iterator = iter(iterable)
+            while True:
+                try:
+                    yield next(iterator)
+                except StopIteration:
+                    iterator = iter(iterable)
+                    yield next(iterator)
+
+        train_iter = cycle(train_dataloader)
+
         total_train_loss = 0.0
         logging_step_count = 0
         start_time = time.time()
-        loss = None
-        progress = tqdm(range(self.config.training_steps), desc=f"{model_type} seed={seed}")
+        loss_val = 0.0
+
         if self.config.cohort_scheduler is not None:
             cohort_scheduler = self._create_cohort_scheduler(
                 self.config.cohort_scheduler, device
             )
         else:
             cohort_scheduler = None
+
+        progress = tqdm(
+            range(self.config.training_steps), desc=f"{model_type} seed={seed}"
+        )
+
+        model.train()
+
         for step in progress:
-            model.train()
+            batch = next(train_iter)
 
-            # Get batch
-            try:
-                batch = next(train_iter)
-            except StopIteration:
-                train_iter = iter(train_dataloader)
-                batch = next(train_iter)
+            input_ids = batch["input_ids"].to(device, non_blocking=True)
+            labels = batch["labels"].to(device, non_blocking=True)
 
-            input_ids = batch["input_ids"].to(device)
-            labels = batch["labels"].to(device)
+            # FIX: Use new torch.amp API with device type 'cuda'
+            with torch.amp.autocast("cuda", enabled=use_amp):  # type: ignore
+                outputs = model(input_ids, labels=labels)
+                loss = outputs["loss"]
 
-            # Forward pass
-            outputs = model(input_ids, labels=labels)
-            loss = outputs["loss"]
+            optimizer.zero_grad(set_to_none=True)
 
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+
             if cohort_scheduler is not None:
                 cohort_scheduler.apply_to_gradients(model)
                 cohort_scheduler.step()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
-            optimizer.step()
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), self.config.max_grad_norm
+            )
 
-            # Step the scheduler based on type
+            scaler.step(optimizer)
+            scaler.update()
+
+            # Pylance assertion to fix "metrics argument missing"
             if self.config.scheduler_type == "cosine":
                 assert isinstance(scheduler, torch.optim.lr_scheduler.LambdaLR)
                 scheduler.step()
-            # For plateau scheduler, we step with eval_loss during evaluation
 
-            # Update progress
-            progress.set_postfix(
-                {
-                    "loss": f"{loss.item():.4f}, no_improvement_count: {no_improvement_count}, lr: {optimizer.param_groups[0]['lr']:.6f}"
-                }
-            )
+            total_train_loss += loss.item()
+            logging_step_count += 1
+
+            if step % 10 == 0:
+                current_lr = optimizer.param_groups[0]["lr"]
+                loss_val = loss.item()
+                progress.set_postfix(
+                    {
+                        "loss": f"{loss_val:.4f}",
+                        "no_imp": no_improvement_count,
+                        "lr": f"{current_lr:.6f}",
+                    }
+                )
 
             # Evaluation
             if (step + 1) % self.config.eval_interval == 0:
-                eval_loss = self.evaluate(model, eval_dataloader, self.config.eval_batches, device)
-                perplexity = np.exp(eval_loss)
-                avg_train_loss = total_train_loss / (logging_step_count + 1)
+                logging.info(f"Evaluating at step {step+1}")
 
-                # Check for improvement based on scheduler type
+                model.eval()
+                with torch.no_grad():
+                    eval_loss = self.evaluate(
+                        model, eval_dataloader, self.config.eval_batches, device
+                    )
+                model.train()
+
+                perplexity = np.exp(eval_loss)
+                avg_train_loss = (
+                    total_train_loss / logging_step_count
+                    if logging_step_count > 0
+                    else 0.0
+                )
+
                 if self.config.scheduler_type == "plateau":
                     improvement = best_eval_loss - eval_loss
-                    if improvement > self.config.plateau_threshold or best_eval_loss == float(
-                        "inf"
+                    if (
+                        improvement > self.config.plateau_threshold
+                        or best_eval_loss == float("inf")
                     ):
                         best_eval_loss = eval_loss
                         no_improvement_count = 0
-                        logging.info(
-                            f"Plateau improvement: best_eval_loss updated to {best_eval_loss:.4f} "
-                            f"(improvement={improvement:.4f} > threshold={self.config.plateau_threshold})"
-                        )
+                        logging.info(f"Plateau improvement: {best_eval_loss:.4f}")
                     else:
                         no_improvement_count += 1
                         logging.info(
-                            f"Plateau no improvement: best_eval_loss remains {best_eval_loss:.4f} "
-                            f"(improvement={improvement:.4f} <= threshold={self.config.plateau_threshold}), "
-                            f"no_improvement_count={no_improvement_count}"
+                            f"Plateau no improvement. Count: {no_improvement_count}"
                         )
+
+                    assert isinstance(
+                        scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau
+                    )
+                    scheduler.step(eval_loss)
                 else:
-                    # cosine scheduler: any improvement counts
                     if eval_loss < best_eval_loss:
                         best_eval_loss = eval_loss
-                    # no_improvement_count is not used for cosine, keep it zero
                     no_improvement_count = 0
-
-                # Step the plateau scheduler with evaluation loss
-                if self.config.scheduler_type == "plateau":
-                    assert isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
-                    scheduler.step(eval_loss)
 
                 loss_history.append(
                     {
@@ -320,51 +369,40 @@ class PretrainingExperiment:
                         "train_loss": avg_train_loss,
                         "eval_loss": eval_loss,
                         "perplexity": perplexity,
-                        "lr": (
-                            scheduler.get_last_lr()[0]
-                            if self.config.scheduler_type == "cosine"
-                            else optimizer.param_groups[0]["lr"]
-                        ),
+                        "lr": optimizer.param_groups[0]["lr"],
                     }
                 )
 
                 logging.info(
                     f"{model_type} seed={seed} step={step+1}: "
-                    f"train_loss={avg_train_loss:.4f}, eval_loss={eval_loss:.4f}, "
-                    f"ppl={perplexity:.2f} lr={loss_history[-1]['lr']:.6f}"
+                    f"train={avg_train_loss:.4f}, eval={eval_loss:.4f}, "
+                    f"ppl={perplexity:.2f}, lr={optimizer.param_groups[0]['lr']:.6f}"
                 )
-                # Reset the running loss and step count for the next interval
+
                 total_train_loss = 0.0
                 logging_step_count = 0
 
-                # Early stopping check (only for plateau scheduler)
                 if (
                     self.config.scheduler_type == "plateau"
                     and no_improvement_count >= early_stop_patience
                 ):
-                    logging.info(
-                        f"{model_type} seed={seed}: Early stopping triggered after "
-                        f"{no_improvement_count} evaluations without improvement. "
-                        f"early_stop_patience={early_stop_patience}"
-                    )
+                    logging.info("Early stopping triggered.")
                     break
+
         training_time = time.time() - start_time
 
-        # Final evaluation
-        final_eval_loss = self.evaluate(model, eval_dataloader, None, device)  # Full eval
+        model.eval()
+        with torch.no_grad():
+            final_eval_loss = self.evaluate(model, eval_dataloader, None, device)
 
-        # Get polynomial stats for dendritic layers
         from dendritic.enhancement import get_polynomial_stats
 
         polynomial_stats = get_polynomial_stats(model)
 
-        # Use last loss if available, else use final_eval_loss
-        final_train_loss = loss.item() if loss is not None else final_eval_loss
-
         return TrainingResult(
             model_type=model_type,
             seed=seed,
-            final_train_loss=final_train_loss,
+            final_train_loss=loss_val,
             final_eval_loss=final_eval_loss,
             final_perplexity=float(np.exp(final_eval_loss)),
             best_eval_loss=best_eval_loss,
@@ -374,7 +412,6 @@ class PretrainingExperiment:
             config=self.config.__dict__,
             polynomial_stats=polynomial_stats,
         )
-
 
     def evaluate(
         self,
@@ -445,10 +482,7 @@ class PretrainingExperiment:
             torch.cuda.empty_cache()
 
         # Statistical analysis
-        model_results = {
-            variant.name: variant.results
-            for variant in model_variants
-        }
+        model_results = {variant.name: variant.results for variant in model_variants}
         statistical_analysis = analyze_results(model_results)
 
         # Create results object
@@ -458,9 +492,8 @@ class PretrainingExperiment:
             config=self.config,
         )
 
-        # Save and print summary
-        save_experiment_results(results, output_dir)
-        print_experiment_summary(results)
+        # Save and print summary moved to caller
+        # save_experiment_results(results, output_dir)
+        # print_experiment_summary(results)
 
         return results
-

@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 
+import dataclasses
 import json
 import logging
 from datetime import datetime
@@ -15,43 +16,51 @@ from dendritic.experiments.utils.ExperimentResults import ExperimentResults, Tra
 
 
 
+def _convert_numpy_types(obj):
+    """Recursively convert numpy types and dataclasses to native Python types for JSON serialization."""
+    if isinstance(obj, np.generic):
+        return obj.item()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: _convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_numpy_types(item) for item in obj]
+    elif dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        # Convert dataclass instance to dict, then recursively convert its values
+        return _convert_numpy_types(dataclasses.asdict(obj))
+    # For any other object with __dict__, convert to dict (e.g., simple classes)
+    elif hasattr(obj, '__dict__') and not isinstance(obj, type):
+        return _convert_numpy_types(obj.__dict__)
+    return obj
+
+
+def _serialize_runs(runs):
+    """Serialize a list of TrainingResult objects for JSON output."""
+    return [
+        {
+            "seed": r.seed,
+            "final_ppl": _convert_numpy_types(r.final_perplexity),
+            "best_ppl": _convert_numpy_types(r.best_perplexity),
+            "training_time": r.training_time,
+            "loss_history": _convert_numpy_types(r.loss_history),
+            "polynomial_stats": _convert_numpy_types(r.polynomial_stats)
+        }
+        for r in runs
+    ]
+
+
 def save_experiment_results(results: ExperimentResults, output_dir: Path) -> None:
     """Save experiment results to JSON after converting numpy types to native types."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    def convert_numpy_types(obj):
-        """Recursively convert numpy types to native Python types for JSON serialization."""
-        if isinstance(obj, np.generic):
-            return obj.item()
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, dict):
-            return {k: convert_numpy_types(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [convert_numpy_types(item) for item in obj]
-        return obj
-
-    def serialize_runs(runs):
-        """Serialize a list of TrainingResult objects for JSON output."""
-        return [
-            {
-                "seed": r.seed,
-                "final_ppl": convert_numpy_types(r.final_perplexity),
-                "best_ppl": convert_numpy_types(r.best_perplexity),
-                "training_time": r.training_time,
-                "loss_history": convert_numpy_types(r.loss_history),
-                "polynomial_stats": convert_numpy_types(r.polynomial_stats)
-            }
-            for r in runs
-        ]
-
     # Convert to serializable format
     output = {
         "timestamp": timestamp,
-        "config": results.config.__dict__,
-        "statistical_analysis": convert_numpy_types(results.statistical_analysis),
+        "config": _convert_numpy_types(results.config.__dict__),
+        "statistical_analysis": _convert_numpy_types(results.statistical_analysis),
         "model_runs": {
-            model_name: serialize_runs(runs)
+            model_name: _serialize_runs(runs)
             for model_name, runs in results.model_results.items()
         }
     }
@@ -60,7 +69,55 @@ def save_experiment_results(results: ExperimentResults, output_dir: Path) -> Non
     with open(filepath, "w") as f:
         json.dump(output, f, indent=2)
 
-    logging.info(f"Results saved to {filepath}")
+
+
+def serialize_experiment_results(results: ExperimentResults) -> dict:
+    """Convert ExperimentResults to a serializable dictionary."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return {
+        "timestamp": timestamp,
+        "config": _convert_numpy_types(results.config.__dict__),
+        "statistical_analysis": _convert_numpy_types(results.statistical_analysis),
+        "model_runs": {
+            model_name: _serialize_runs(runs)
+            for model_name, runs in results.model_results.items()
+        }
+    }
+
+
+def save_consolidated_results(
+    results_by_variant: dict[str, ExperimentResults],
+    output_dir: Path,
+) -> None:
+    """Save consolidated experiment results from multiple variants to a single JSON file."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    variants = {}
+    for variant_id, results in results_by_variant.items():
+        variants[variant_id] = serialize_experiment_results(results)
+    
+    output = {
+        "timestamp": timestamp,
+        "variants": variants,
+    }
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filepath = output_dir / f"pretraining_experiment_consolidated_{timestamp}.json"
+    with open(filepath, "w") as f:
+        json.dump(output, f, indent=2)
+    
+    logging.info(f"Consolidated results saved to {filepath}")
+
+
+def print_consolidated_summary(results_by_variant: dict[str, ExperimentResults]) -> None:
+    """Print a summary of consolidated experiment results across variants."""
+    print("\n" + "=" * 70)
+    print("CONSOLIDATED EXPERIMENT SUMMARY")
+    print("=" * 70)
+    
+    for variant_id, results in results_by_variant.items():
+        print(f"\n--- Variant: {variant_id} ---")
+        print_experiment_summary(results)
 
 
 def print_metric_summary(
