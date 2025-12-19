@@ -82,7 +82,7 @@ def run_pretraining_experiment(
         training_steps=training_steps_count,
         batch_size=20,
         eval_interval=min(max(training_steps_count // 20, 1), 500),
-        seeds=[42],  # Use fewer seeds for faster testing,
+        seeds=[24],  # Use fewer seeds for faster testing,
         scheduler_type="cosine",
         plateau_threshold=0.001,
     )
