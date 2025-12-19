@@ -1,5 +1,5 @@
-from .PretrainingConfig import PretrainingConfig
-from .TrainingResult import TrainingResult
+from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
+from dendritic.experiments.utils.TrainingResult import TrainingResult
 
 
 from dataclasses import dataclass
