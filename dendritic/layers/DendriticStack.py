@@ -1,17 +1,53 @@
-from typing import Optional
-from dendritic.layers.DendriticLayer import DendriticLayer
-
+from typing import Literal
 
 import torch
 import torch.nn as nn
-from gguf import Literal
 import torch.nn.functional as F
 
 
 class DendriticStack(nn.Module):
     """
-    Clean degree-k polynomial, drop-in Linear replacement.
-    Activation comes from the surrounding architecture.
+    General degree-k polynomial layer with optional diagonal squared terms.
+    
+    Computes:
+        output = Wx + b + scale · W_out @ (∏_{i=1}^{k} (W_i x))
+    
+    where k = poly_degree. This represents a degree-k polynomial with rank r = poly_rank.
+    The k-way product formulation (W_i ≠ W_j) provides richer interactions than symmetric
+    alternatives and can approximate any degree-k polynomial of rank r.
+    
+    Additionally, an optional diagonal pathway captures squared terms:
+        diag_out = W_diag_out @ (W_diag_in @ x)²
+    
+    This diagonal pathway is useful when inputs are independent (e.g., tabular features).
+    
+    Parameter count:
+        Linear: input_dim * output_dim + (output_dim if bias else 0)
+        Projections: poly_degree * poly_rank * input_dim
+        Poly_out: output_dim * poly_rank
+        Scale: 1
+        Diagonal (if effective_diag_rank > 0): effective_diag_rank * input_dim + output_dim * effective_diag_rank + 1
+        where effective_diag_rank is determined by independent_inputs and diag_rank.
+    
+    Args:
+        input_dim: Input feature dimension
+        output_dim: Output feature dimension
+        poly_rank: Rank of polynomial (number of interaction terms)
+        poly_degree: Degree of polynomial (k), default 3
+        init_scale: Initial scale for polynomial pathway (default: 0.1)
+        bias: Include bias in linear pathway (default: True)
+        independent_inputs: Control 'auto' behavior for diagonal terms.
+            - False (Default): Assumes inputs are distributed/entangled (e.g., embeddings,
+              images, deep hidden states). Sets effective_diag_rank = max(4, poly_rank // 4) to save params.
+            - True: Assumes inputs are disentangled/independent (e.g., tabular features,
+              physical variables, network input layer). Sets effective_diag_rank = poly_rank
+              to maximize capacity for individual x_i² terms.
+        diag_rank: Rank for squared terms. Can be an integer, None, or 'auto'.
+            If None or 'auto', the rank is determined by independent_inputs as above.
+            If 0, the diagonal pathway is disabled.
+    
+    Note:
+        DendriticLayer is a subclass with poly_degree=2, providing a quadratic layer.
     """
 
     @staticmethod
@@ -69,7 +105,6 @@ class DendriticStack(nn.Module):
         diag_rank: int | Literal['auto'] = "auto",  # Changed default to flexible
         init_scale: float = 0.1,
         bias: bool = True,
-
     ):
         super().__init__()
         # Linear pathway (preserved for initialization from pretrained)
@@ -82,8 +117,8 @@ class DendriticStack(nn.Module):
         ])
         self.poly_out = nn.Parameter(torch.empty(output_dim, poly_rank))
         self.scale = nn.Parameter(torch.tensor(init_scale))
-                # Optional diagonal        
-                # # Logic for auto-configuring the diagonal rank
+        # Optional diagonal
+        # Logic for auto-configuring the diagonal rank
         if diag_rank is None or diag_rank == "auto":
             if independent_inputs:
                 self.diag_rank = poly_rank
@@ -122,11 +157,19 @@ class DendriticStack(nn.Module):
         for w in self.projections[1:]:
             poly = poly * F.linear(x, w)
         
-        return out + self.scale * F.linear(poly, self.poly_out)    
+        out = out + self.scale * F.linear(poly, self.poly_out)
+        
+        # Diagonal pathway
+        if self.use_diagonal:
+            assert self.w_diag_in is not None and self.w_diag_out is not None and self.diag_scale is not None
+            h_diag = F.linear(x, self.w_diag_in)  # [batch, diag_rank]
+            diag = F.linear(h_diag * h_diag, self.w_diag_out)  # [batch, output_dim]
+            out = out + self.diag_scale * diag
+        
+        return out
 
 try:
     from torch.serialization import add_safe_globals
-    from .DendriticStack import DendriticStack # Adjust import path as needed
     add_safe_globals([DendriticStack])
 except ImportError:
     # Fallback for older PyTorch versions that don't have add_safe_globals
