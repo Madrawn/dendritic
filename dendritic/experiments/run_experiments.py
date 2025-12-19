@@ -48,6 +48,7 @@ def run_pretraining_experiment(
     num_workers: int | None = None,
     scheduler_variants: list[PretrainingConfig] | None = None,
     param_grid: dict | None = None,
+    base_config: PretrainingConfig | None = None,
 ) -> dict[str, ExperimentResults]:
     """Run the pretraining experiment across configured seeds.
 
@@ -64,6 +65,8 @@ def run_pretraining_experiment(
         Mapping of CohortSchedulerConfig field names to lists of values to sweep over.
         If provided, generates scheduler_variants via Cartesian product.
         Example: {"min_mult": [0.4, 0.5], "sharpness": [1.0, 2.0]}
+    base_config : PretrainingConfig | None, optional
+        Base configuration to use. If None, a default config is created.
 
     Returns
     -------
@@ -78,14 +81,15 @@ def run_pretraining_experiment(
 
     training_steps_count = 6000
     # Base configuration (used when no variants are supplied)
-    base_config = PretrainingConfig(
-        training_steps=training_steps_count,
-        batch_size=20,
-        eval_interval=min(max(training_steps_count // 20, 1), 500),
-        seeds=[24],  # Use fewer seeds for faster testing,
-        scheduler_type="cosine",
-        plateau_threshold=0.001,
-    )
+    if base_config is None:
+        base_config = PretrainingConfig(
+            training_steps=training_steps_count,
+            batch_size=20,
+            eval_interval=min(max(training_steps_count // 20, 1), 500),
+            seeds=[24],  # Use fewer seeds for faster testing,
+            scheduler_type="cosine",
+            plateau_threshold=0.001,
+        )
     # Determine which configs to run
     if param_grid is not None:
         variants = generate_scheduler_variants(base_config, param_grid)
