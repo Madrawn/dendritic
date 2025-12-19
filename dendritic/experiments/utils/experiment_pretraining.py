@@ -250,12 +250,11 @@ class PretrainingExperiment:
         device: str,
         optimizer: torch.optim.Optimizer,
     ) -> TrainingResult:
-        """Train a single model and return results (Fixed & Optimized)."""
+        """Train a single model (Fixed: Seeding, Scaler, and Cohort Scheduler)."""
         
         # ========== 1. CUDA & PRECISION SETUP ==========
         use_cuda = torch.cuda.is_available() and device.startswith("cuda")
         if use_cuda:
-            # TF32 allows ~3x speedup on Ampere+ GPUs (A100, 3090, 4090)
             torch.set_float32_matmul_precision("medium")
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
@@ -264,13 +263,8 @@ class PretrainingExperiment:
         model = model.to(device)
 
         # ========== 2. COMPILATION ==========
-        # Windows requires "default", Linux benefits from "reduce-overhead" (CUDA Graphs)
-        # We explicitly handle the fallback to ensure V1 parity if on Linux.
-        if os.name == "nt":
-            compile_mode = "default"
-        else:
-            compile_mode = "reduce-overhead"
-            
+        # Windows -> default, Linux -> reduce-overhead
+        compile_mode = "default" if os.name == "nt" else "reduce-overhead"
         try:
             logging.info(f"Compiling model with mode='{compile_mode}'...")
             model = torch.compile(model, mode=compile_mode)
@@ -280,18 +274,15 @@ class PretrainingExperiment:
                 model = model._orig_mod
 
         # ========== 3. SCHEDULER ==========
-        # Capture config values locally to ensure stability
         warmup_steps = int(self.config.warmup_steps)
         training_steps = int(self.config.training_steps)
         
         if self.config.scheduler_type == "cosine":
             def lr_lambda(step: int) -> float:
-                # Explicit float division and check
                 if step < warmup_steps:
                     return float(step) / float(max(1, warmup_steps))
                 progress = float(step - warmup_steps) / float(max(1, training_steps - warmup_steps))
                 return 0.5 * (1.0 + np.cos(np.pi * progress))
-                
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
         elif self.config.scheduler_type == "plateau":
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -303,34 +294,36 @@ class PretrainingExperiment:
             raise ValueError(f"Unknown scheduler type: {self.config.scheduler_type}")
 
         # ========== 4. AMP & SCALER ==========
-        # Use BF16 if available (no scaler needed usually, but good practice to keep logic consistent)
+        # Check support but keep scaler ENABLED for safety (prevents PPL explosion)
         bf16_supported = use_cuda and torch.cuda.is_bf16_supported()
         amp_dtype = torch.bfloat16 if bf16_supported else torch.float16
-        # BF16 doesn't strictly need a scaler, but FP16 does.
         scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
         
-        # ========== 5. SEEDING & DATA ITERATOR (CRITICAL FIX) ==========
-        # We seed RIGHT BEFORE creating the iterator. 
-        # This prevents torch.compile overhead from altering the shuffle order.
+        # ========== 5. COHORT SCHEDULER ==========
+        # (Restored)
+        if self.config.cohort_scheduler is not None:
+            cohort_scheduler = self._create_cohort_scheduler(self.config.cohort_scheduler, device)
+        else:
+            cohort_scheduler = None
+
+        # ========== 6. SEEDING & DATA ITERATOR (Fixes Divergence) ==========
+        # Seed MUST happen here, after compilation, before iterator creation
         torch.manual_seed(seed)
         np.random.seed(seed)
         if use_cuda:
             torch.cuda.manual_seed_all(seed)
 
-        # Now create the iterator (Shuffling happens here)
         train_iter = self.prefetching_cycle(train_dataloader, device)
 
-        # ========== 6. TRAINING STATE ==========
+        # ========== 7. TRAINING STATE ==========
         best_eval_loss = float("inf")
         no_improvement_count = 0
         loss_history = []
         
-        # Accumulators
         total_train_loss_tensor = torch.tensor(0.0, device=device)
         logging_step_count = 0
         start_time = time.time()
         
-        # Optimization vars
         clip_grad_norm = self.config.max_grad_norm
         is_cosine = (self.config.scheduler_type == "cosine")
         eval_interval = self.config.eval_interval
@@ -339,7 +332,6 @@ class PretrainingExperiment:
         model.train()
 
         for step in progress:
-            # Fetch data (already on GPU via prefetcher)
             input_ids, labels = next(train_iter)
 
             # Forward
@@ -351,33 +343,39 @@ class PretrainingExperiment:
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             
-            # Gradient Clipping (Standard logic)
+            # --- CRITICAL: Unscale BEFORE manipulating gradients ---
+            # We must unscale here so cohort_scheduler and clipper see real gradients
+            scaler.unscale_(optimizer)
+
+            # (Restored Cohort Logic)
+            if cohort_scheduler is not None:
+                cohort_scheduler.apply_to_gradients(model)
+                cohort_scheduler.step()
+
+            # Gradient Clipping
             if clip_grad_norm > 0:
-                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
 
-            # Step
+            # Optimizer Step (Scaler checks for NaNs here)
             scaler.step(optimizer)
             scaler.update()
 
-            # Scheduler
+            # Scheduler Step
             if is_cosine:
                 scheduler.step()
 
-            # Accumulate Loss (No CPU Sync)
+            # Accumulate Loss (GPU resident)
             total_train_loss_tensor += loss.detach()
             logging_step_count += 1
 
-            # Update Progress Bar (Sync only occasionally)
+            # Update Progress Bar (Periodic Sync)
             if step % 100 == 0:
-                # We use .item() here which syncs, but only every 100 steps
                 current_loss = loss.item()
-                lr = optimizer.param_groups[0]["lr"]
-                progress.set_postfix({"loss": f"{current_loss:.4f}", "lr": f"{lr:.6f}"})
+                lr_curr = optimizer.param_groups[0]["lr"]
+                progress.set_postfix({"loss": f"{current_loss:.4f}", "lr": f"{lr_curr:.6f}"})
 
-            # Evaluation
+            # Evaluation Loop
             if (step + 1) % eval_interval == 0:
-                # Calculate average loss from accumulated tensor
                 avg_train_loss = total_train_loss_tensor.item() / logging_step_count
                 total_train_loss_tensor.zero_()
                 logging_step_count = 0
@@ -391,18 +389,15 @@ class PretrainingExperiment:
 
                 perplexity = np.exp(eval_loss)
                 
-                # Update Best
                 if eval_loss < best_eval_loss:
                     best_eval_loss = eval_loss
                     no_improvement_count = 0
                 else:
                     no_improvement_count += 1
 
-                # Plateau Scheduler Logic
                 if not is_cosine:
                     scheduler.step(eval_loss)
 
-                # Logging
                 loss_history.append({
                     "step": step + 1,
                     "train_loss": avg_train_loss,
@@ -421,7 +416,6 @@ class PretrainingExperiment:
                     logging.info("Early stopping triggered.")
                     break
 
-        # Final Cleanup
         training_time = time.time() - start_time
         final_train_loss = loss.item()
         
@@ -446,7 +440,6 @@ class PretrainingExperiment:
             config=self.config.__dict__,
             polynomial_stats=polynomial_stats,
         )
-
     def evaluate(
         self,
         model: torch.nn.Module,
