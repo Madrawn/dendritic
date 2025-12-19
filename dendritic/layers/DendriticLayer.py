@@ -1,4 +1,3 @@
-from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,7 +60,7 @@ class DendriticLayer(nn.Module):
         output_dim: int,
         poly_rank: int = 16,
         independent_inputs: bool = False,
-        diag_rank: Optional[int] | Literal['auto'] = "auto",
+        diag_rank: int | Literal['auto'] = "auto",
         init_scale: float = 0.1,
         bias: bool = True,
         *args,
@@ -96,7 +95,7 @@ class DendriticLayer(nn.Module):
         output_dim: int,
         poly_rank: int = 16,
         independent_inputs: bool = False,
-        diag_rank: Optional[int] | Literal['auto'] = "auto",  # Changed default to flexible
+        diag_rank: int | Literal['auto'] = "auto",  # Changed default to flexible
         init_scale: float = 0.1,
         bias: bool = True,
         *args,
