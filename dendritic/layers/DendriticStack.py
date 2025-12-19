@@ -13,7 +13,52 @@ class DendriticStack(nn.Module):
     Clean degree-k polynomial, drop-in Linear replacement.
     Activation comes from the surrounding architecture.
     """
-    
+
+    @staticmethod
+    def _compute_diag_rank(diag_rank, independent_inputs, poly_rank):
+        """
+        Compute effective diagonal rank given the arguments.
+        """
+        if diag_rank is None or diag_rank == "auto":
+            return poly_rank if independent_inputs else max(4, poly_rank // 4)
+        return diag_rank
+
+    @classmethod
+    def parameter_count(
+        cls,
+        input_dim: int,
+        output_dim: int,
+        poly_rank: int = 16,
+        poly_degree: int = 3,
+        independent_inputs: bool = False,
+        diag_rank: int | Literal['auto'] = "auto",
+        init_scale: float = 0.1,
+        bias: bool = True,
+        include_linear: bool = True,
+    ) -> int:
+        """
+        Calculate total number of parameters for a DendriticStack with these dimensions.
+        """
+        # Compute effective diagonal rank
+        effective_diag_rank = cls._compute_diag_rank(diag_rank, independent_inputs, poly_rank)
+        
+        # Linear pathway (optional)
+        linear_params = 0
+        if include_linear:
+            linear_params = input_dim * output_dim + (output_dim if bias else 0)
+        
+        # Degree-k polynomial pathway
+        projections_params = poly_degree * (poly_rank * input_dim)
+        poly_out_params = output_dim * poly_rank
+        scale_params = 1
+        
+        # Diagonal pathway
+        diag_params = 0
+        if isinstance(effective_diag_rank, int) and effective_diag_rank > 0:
+            diag_params = effective_diag_rank * input_dim + output_dim * effective_diag_rank + 1
+        
+        return linear_params + projections_params + poly_out_params + scale_params + diag_params
+
     def __init__(
         self,
         input_dim: int,

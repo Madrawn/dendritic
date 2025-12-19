@@ -84,29 +84,21 @@ def count_dendritic_layer_params(
     - W_diag_out: output_dim * diag_rank (if diag_rank > 0)
     - diag_scale: 1 (if diag_rank > 0)
     """
-    # Linear pathway
-    linear_params = input_dim * output_dim + (output_dim if bias else 0)
-    
-    # Cross-term pathway
-    cross_params = 2 * poly_rank * input_dim  # W1, W2
-    cross_params += output_dim * poly_rank     # poly_out
-    cross_params += 1                          # scale
-    
-    # Diagonal pathway
-    diag_params = 0
-    if diag_rank > 0:
-        diag_params = diag_rank * input_dim    # W_diag_in
-        diag_params += output_dim * diag_rank  # W_diag_out
-        diag_params += 1                       # diag_scale
-    
-    return linear_params + cross_params + diag_params
+    from dendritic.layers.DendriticLayer import DendriticLayer
+    return DendriticLayer.parameter_count(
+        input_dim=input_dim,
+        output_dim=output_dim,
+        poly_rank=poly_rank,
+        independent_inputs=False,
+        diag_rank=diag_rank,
+        bias=bias,
+    )
 
 
 def count_dendritic_stack_params(
     input_dim: int,
     output_dim: int,
     poly_rank: int,
-    bottleneck_dim: Optional[int] = None,  # ignored for new architecture
     diag_rank: Optional[int] = None,
     bias: bool = True,
     preserve_linear_path: bool = True,
@@ -124,41 +116,23 @@ def count_dendritic_stack_params(
     Parameters:
         input_dim, output_dim: layer dimensions
         poly_rank: rank of polynomial projections
-        bottleneck_dim: ignored (kept for compatibility)
         diag_rank: diagonal rank; if None or "auto", computed based on independent_inputs
         bias: whether linear pathway includes bias
         preserve_linear_path: whether to include linear pathway parameters
         poly_degree: number of projection matrices (k)
         independent_inputs: if True, diag_rank = poly_rank; else diag_rank = max(4, poly_rank // 4)
     """
-    # Determine diagonal rank (same logic as DendriticStack)
-    if diag_rank is None or diag_rank == "auto":
-        if independent_inputs:
-            diag_rank = poly_rank
-        else:
-            diag_rank = max(4, poly_rank // 4)
-    # Ensure diag_rank is int (if "auto" already handled)
-    if isinstance(diag_rank, str):
-        # fallback
-        diag_rank = max(4, poly_rank // 4)
-    
-    # Linear pathway (preserved for initialization)
-    linear_params = 0
-    if preserve_linear_path:
-        linear_params = input_dim * output_dim + (output_dim if bias else 0)
-    
-    # Degree-k polynomial pathway
-    projections_params = poly_degree * (poly_rank * input_dim)
-    poly_out_params = output_dim * poly_rank
-    scale_params = 1
-    
-    # Diagonal pathway (if diag_rank > 0)
-    diag_params = 0
-    if diag_rank > 0:
-        diag_params = diag_rank * input_dim + output_dim * diag_rank + 1
-    
-    total = linear_params + projections_params + poly_out_params + scale_params + diag_params
-    return total
+    from dendritic.layers.DendriticStack import DendriticStack
+    return DendriticStack.parameter_count(
+        input_dim=input_dim,
+        output_dim=output_dim,
+        poly_rank=poly_rank,
+        poly_degree=poly_degree,
+        independent_inputs=independent_inputs,
+        diag_rank=diag_rank if diag_rank is not None else "auto",
+        bias=bias,
+        include_linear=preserve_linear_path,
+    )
 
 
 def count_lora_params(
