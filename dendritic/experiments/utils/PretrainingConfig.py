@@ -53,6 +53,10 @@ class PretrainingConfig:
     cohort_scheduler: CohortSchedulerConfig | None = None
     output_dir: str = "results/pretraining_comparison"
 
+    # Dataset configuration
+    dataset: str = "wikitext"
+    dataset_kwargs: dict = field(default_factory=dict)
+
     # Computed fields (set in __post_init__)
     baseline_hidden_dim: int = 0
     dendritic_hidden_dim: int = 0

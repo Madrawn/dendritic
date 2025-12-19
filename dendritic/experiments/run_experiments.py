@@ -35,6 +35,7 @@ from dendritic.experiments.utils.experiment_finetuning import (
     FinetuningExperimentResults,
     run_finetuning_experiment,
 )
+from dendritic.dataset_handlers.factory import get_handler
 
 # Environment configuration
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
@@ -49,6 +50,7 @@ def run_pretraining_experiment(
     scheduler_variants: list[PretrainingConfig] | None = None,
     param_grid: dict | None = None,
     base_config: PretrainingConfig | None = None,
+    dataset: str = "wikitext",
 ) -> dict[str, ExperimentResults]:
     """Run the pretraining experiment across configured seeds.
 
@@ -89,7 +91,10 @@ def run_pretraining_experiment(
             seeds=[24],  # Use fewer seeds for faster testing,
             scheduler_type="cosine",
             plateau_threshold=0.001,
+            dataset=dataset,
         )
+    else:
+        base_config.dataset = dataset
     # Determine which configs to run
     if param_grid is not None:
         variants = generate_scheduler_variants(base_config, param_grid)
@@ -174,6 +179,12 @@ def main() -> None:
         default=max(multiprocessing.cpu_count() // 2, 1),
         help="Number of worker processes for data loading (default: half of CPU cores, at least 1)",
     )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="wikitext",
+        help="Dataset identifier for pretraining (e.g., 'wikitext', 'openwebmath')",
+    )
 
     args = parser.parse_args()
     # Map textual log level to logging constant; default to INFO if not provided
@@ -195,7 +206,7 @@ def main() -> None:
         logger.info("=" * 70)
         param_grid = {"min_mult": [0.3, 0.5, 0.7], "sharpness": [1.0, 2.0, 3.0]}
 
-        run_pretraining_experiment(args.device, args.num_workers, param_grid=param_grid)
+        run_pretraining_experiment(args.device, args.num_workers, param_grid=param_grid, dataset=args.dataset)
 
     if args.experiment in ["finetuning", "both"]:
         logger.info("\n" + "=" * 70)
@@ -350,14 +361,14 @@ def load_pretraining_data(
     max_length: int = 256,
     num_workers: int | None = None,
 ) -> tuple[DataLoader, DataLoader]:
-    """Load and preprocess the WikiText-103 dataset for pretraining.
+    """Load and preprocess a text corpus dataset for pretraining.
 
     Parameters
     ----------
     tokenizer : GPT2Tokenizer
         Tokenizer to use for text tokenization.
     config : PretrainingConfig
-        Configuration object containing training parameters.
+        Configuration object containing training parameters and dataset selection.
     max_length : int, optional
         Maximum sequence length for tokenization. Defaults to 256.
     num_workers : int | None, optional
@@ -370,93 +381,86 @@ def load_pretraining_data(
         Training and evaluation DataLoaders.
     """
 
-    from datasets import load_dataset, Dataset
+    from datasets import Dataset
+    import multiprocessing
 
     # Compute required samples: steps * batch_size * epochs (safety margin +10%)
     num_train_samples = (
         int(config.training_steps * config.batch_size * 1 * 1.1) * 5
     )  # compensate for packing
     num_eval_samples = int(num_train_samples * 0.1)
+    total_raw_samples = num_train_samples + num_eval_samples
 
     logger.info(
         f"Loading {num_train_samples:,} train + {num_eval_samples:,} eval samples "
         f"(target: {config.training_steps * config.batch_size:,} batches)"
     )
-    logger.info(f"Loading WikiText-103 (Top {num_train_samples} samples)...")
+    logger.info(f"Dataset: {config.dataset}")
 
-    # We load the full split first, then filter/select
-    # This ensures we don't count empty lines as 'samples'
-    try:
-        full_train = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
-        full_eval = load_dataset("wikitext", "wikitext-103-raw-v1", split="validation")
-    except Exception as e:
-        logger.error(f"Failed to load WikiText-103 dataset: {e}")
-        raise
+    # Get appropriate dataset handler
+    handler = get_handler(config.dataset, tokenizer, max_length=max_length)
+    text_column = handler.text_column
 
-    assert isinstance(full_train, Dataset)
-    assert isinstance(full_eval, Dataset)
-    # Filter empty lines
-    train_filtered = full_train.filter(lambda x: len(x["text"]) > 10)
-    eval_filtered = full_eval.filter(lambda x: len(x["text"]) > 10)
+    # Load raw data with limited samples
+    raw = handler.load_default_data(
+        max_samples=total_raw_samples,
+        split='train',
+        test_size=num_eval_samples / total_raw_samples,
+        streaming=True,
+        seed=42,
+    )
+    train_raw = raw["train"]
+    eval_raw = raw["test"]
 
-    # SAFE SELECTION: Take the minimum of (what we want, what we have)
-    # This prevents the IndexError
+    # Ensure they are Datasets (not IterableDataset) for filtering/selecting
+    if isinstance(train_raw, Dataset) and isinstance(eval_raw, Dataset):
+        # Filter empty lines (length > 10 characters)
+        train_filtered = train_raw.filter(lambda x: len(x[text_column]) > 10)
+        eval_filtered = eval_raw.filter(lambda x: len(x[text_column]) > 10)
 
-    # For Train: Ensure we have enough, or warn the user
-    actual_train_len = len(train_filtered)
-    if actual_train_len < num_train_samples:
-        logger.warning(
-            f"WARNING: Requested {num_train_samples} train samples, but only {actual_train_len} available."
+        # SAFE SELECTION: Take the minimum of (what we want, what we have)
+        actual_train_len = len(train_filtered)
+        if actual_train_len < num_train_samples:
+            logger.warning(
+                f"WARNING: Requested {num_train_samples} train samples, but only {actual_train_len} available."
+            )
+            logger.info("Training will run for fewer steps or cycle data.")
+
+        train_dataset = train_filtered.select(
+            range(min(num_train_samples, actual_train_len))
         )
-        logger.info("Training will run for fewer steps or cycle data.")
-
-    train_dataset = train_filtered.select(
-        range(min(num_train_samples, actual_train_len))
-    )
-
-    # For Eval: Just take whatever is available up to the target
-    eval_dataset = eval_filtered.select(
-        range(min(num_eval_samples, len(eval_filtered)))
-    )
-
-    # def tokenize_function(examples):
-    #     tokenized = tokenizer(
-    #         examples["text"],
-    #         truncation=True,
-    #         max_length=max_length,
-    #         padding="max_length",
-    #         return_tensors="pt",
-    #     )
-    #     tokenized["labels"] = tokenized["input_ids"].clone()
-    #     return tokenized
-    # 1. Tokenize with appended newline
-    def tokenize_fn(examples):
-        # Append \n so we don't merge "End of sentence." and "Start of next" into one word.
-        # GPT-2 tokenizer handles \n (usually maps to token ID 198)
-        texts = [t + "\n" for t in examples["text"]]
-        return tokenizer(texts)
+        eval_dataset = eval_filtered.select(
+            range(min(num_eval_samples, len(eval_filtered)))
+        )
+    else:
+        # Streaming dataset: cannot filter or select; use as‑is
+        logger.warning("Streaming dataset detected; skipping filtering and selection.")
+        train_dataset = train_raw
+        eval_dataset = eval_raw
 
     # Number of parallel processes for dataset mapping – will be overridden by CLI if provided
-    # Determine number of worker processes for dataset mapping.
-    # If the caller provides a value (e.g., via CLI), use it; otherwise fall back to half the CPU cores (minimum 1).
     num_cores = (
         num_workers
         if num_workers is not None
         else (multiprocessing.cpu_count() // 2 or 1)
     )
 
-    # 1. Tokenize without padding first
+    # 1. Tokenize without padding first, using handler's pretraining tokenization
+    def tokenize_fn(examples):
+        # Use handler's tokenize_for_pretraining (appends newline by default)
+        return handler.tokenize_for_pretraining(examples, append_newline=True)
+
     train_ds = train_dataset.map(
         tokenize_fn,
         batched=True,
         remove_columns=train_dataset.column_names,
-        num_proc=num_cores,
+        num_proc=num_cores if isinstance(train_dataset, Dataset) else None,
     )
     eval_ds = eval_dataset.map(
         tokenize_fn,
         batched=True,
         remove_columns=eval_dataset.column_names,
-        num_proc=num_cores,
+        num_proc=num_cores if isinstance(eval_dataset, Dataset) else None,
     )
 
     # 2. Group into blocks of max_length
@@ -481,53 +485,37 @@ def load_pretraining_data(
         group_texts,
         batched=True,
         remove_columns=train_ds.column_names,
-        num_proc=num_cores,
+        num_proc=num_cores if isinstance(train_ds, Dataset) else None,
     )
     eval_dataset = eval_ds.map(
         group_texts,
         batched=True,
         remove_columns=eval_ds.column_names,
-        num_proc=num_cores,
+        num_proc=num_cores if isinstance(eval_ds, Dataset) else None,
     )
 
     train_dataset.set_format("torch")
     eval_dataset.set_format("torch")
     # ========================== DEBUGGING BLOCK START ============================
-    # (Removed inline definition; using module-level helper)
     if logger.isEnabledFor(logging.DEBUG):
         debug_dataset_integrity(train_dataset, tokenizer, logger)
-
-    # Create a temporary loader to grab one batch
-    # (moved into debug_dataset_integrity)
-
-    # (moved into debug_dataset_integrity)
-
-    # 1. Check Ratio of Padding
-    # (moved into debug_dataset_integrity)
-
-    # 2. Check Masking (Crucial for correct PPL)
-    # In PyTorch CrossEntropyLoss, -100 is ignored. If this is 0%, your PPL is fake.
-    # (moved into debug_dataset_integrity)
-
-    # 3. Visual Inspection
-    # (moved into debug_dataset_integrity)
-    # (moved into debug_dataset_integrity)
     # ========================== DEBUGGING BLOCK END ============================
+
     train_dataloader = DataLoader(
         train_dataset,  # type: ignore
         batch_size=config.batch_size,
         shuffle=True,
-        num_workers=num_cores,  # Use background processes to load data
-        pin_memory=True,  # Speeds up CPU-to-GPU transfer
-        persistent_workers=True,  # Keeps workers alive, avoids re-initialization overhead
+        num_workers=num_cores,
+        pin_memory=True,
+        persistent_workers=True,
     )
     eval_dataloader = DataLoader(
         eval_dataset,  # type: ignore
         batch_size=config.batch_size,
         shuffle=False,
-        # num_workers=num_cores,  # Use background processes to load data
-        # pin_memory=True,  # Speeds up CPU-to-GPU transfer
-        # persistent_workers=True,  # Keeps workers alive, avoids re-initialization overhead
+        # num_workers=num_cores,  # evaluation dataloader does not need workers
+        # pin_memory=True,
+        # persistent_workers=True,
     )
 
     return train_dataloader, eval_dataloader

@@ -10,9 +10,12 @@ from typing import Any, Dict
 class BaseDatasetHandler(ABC):
     """Abstract base class for dataset handlers."""
 
-    def __init__(self, tokenizer: PreTrainedTokenizer, max_length: int = 256):
+    def __init__(self, tokenizer: PreTrainedTokenizer, max_length: int = 256, text_column: str = "text"):
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.text_column = text_column
+        self.dataset_name = ""  # Should be set by subclasses
+        self.predefined_splits = None  # Should be set by subclasses
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def load_data(self, **kwargs) -> Dict[str, Any]:
@@ -62,6 +65,33 @@ class BaseDatasetHandler(ABC):
     def tokenize_function(self, examples: Dict[str, Any]) -> Dict[str, Any]:
         """Tokenize batch of examples with proper masking."""
         pass
+
+    def tokenize_for_pretraining(self, examples: Dict[str, Any], append_newline: bool = True) -> Dict[str, Any]:
+        """
+        Tokenize a batch of text examples for pretraining (no padding, no truncation).
+        
+        This is used before block concatenation. Optionally appends a newline token
+        to separate documents/sentences.
+        
+        The base implementation raises NotImplementedError; subclasses that support
+        pretraining should override this method.
+        
+        Parameters
+        ----------
+        examples : Dict[str, Any]
+            Batch with at least the key `self.text_column` containing a list of strings.
+        append_newline : bool
+            Whether to append a newline token to each text.
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Tokenized batch with keys 'input_ids' (list of token IDs).
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support pretraining tokenization. "
+            "Use a dataset handler that inherits from TextCorpusHandler."
+        )
 
     def prepare_data(self, **kwargs) -> Dict[str, Any]:
         """Load and prepare the dataset, including tokenization."""
