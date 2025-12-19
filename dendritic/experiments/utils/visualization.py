@@ -67,15 +67,10 @@ def plot_training_curves(
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     # Determine experiment type and plot
-    if "baseline" in results_data.get(
-        "model_results", {}
-    ) and "dendritic" in results_data.get("model_results", {}):
+    try:
         # Pretraining experiment (with or without stack) - new format
         plot_pretraining_curves(results_data, axes)
-    elif "baseline_runs" in results_data and "dendritic_runs" in results_data:
-        # Pretraining experiment - old format (backward compatibility)
-        plot_pretraining_curves(results_data, axes)
-    else:
+    except Exception as e:
         print("[DEBUG] WARNING: Unrecognized experiment type! No curves plotted.")
         print(f"[DEBUG] Results contained keys: {list(results_data.keys())}")
 
@@ -95,8 +90,8 @@ def plot_pretraining_curves(results: dict, axes):
 
     # Normalize results structure
     model_runs = {}
-    if "model_results" in results:
-        model_runs = results["model_results"]
+    if "model_runs" in results:
+        model_runs = results["model_runs"]
     else:
         # Backward compatibility with old format
         model_runs["baseline"] = results.get("baseline_runs", [])
@@ -239,7 +234,7 @@ def compute_mean_curve(
 
 if __name__ == "__main__":
     results_json_path = (
-        r"results\pretraining_comparison\pretraining_experiment_20251215_144146.json"
+        r"results\pretraining_comparison\pretraining_experiment_20251218_110920.json"
     )
     plot_training_curves(
         results_json_path,
