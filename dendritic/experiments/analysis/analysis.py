@@ -92,9 +92,11 @@ def save_consolidated_results(
     """Save consolidated experiment results from multiple variants to a single JSON file."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    variants = {}
+    variants = []
     for variant_id, results in results_by_variant.items():
-        variants[variant_id] = serialize_experiment_results(results)
+        variant_data = serialize_experiment_results(results)
+        variant_data["name"] = variant_id
+        variants.append(variant_data)
     
     output = {
         "timestamp": timestamp,
