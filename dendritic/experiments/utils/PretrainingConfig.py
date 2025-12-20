@@ -1,22 +1,68 @@
 from dataclasses import dataclass, field
 
+
 # Configuration for optional Cohort LR Scheduler
 @dataclass
 class CohortSchedulerConfig:
     """Parameters for the optional CohortLRScheduler."""
-    min_mult: float = 0.5          # Minimum multiplier for LR scaling
-    max_mult: float = 1.0          # Maximum multiplier for LR scaling
-    sharpness: float = 1.0         # Sharpness of the cosine peak (higher = narrower high LR band)
-    device: str = "cpu"            # Device for scheduler tensors
-    apply_to_gradients: bool = True  # Whether to modify gradients (default current behavior)
+
+    min_mult: float = 0.5  # Minimum multiplier for LR scaling
+    max_mult: float = 1.0  # Maximum multiplier for LR scaling
+    sharpness: float = (
+        1.0  # Sharpness of the cosine peak (higher = narrower high LR band)
+    )
+    device: str = "cpu"  # Device for scheduler tensors
+    apply_to_gradients: bool = (
+        True  # Whether to modify gradients (default current behavior)
+    )
+
+
+from typing import get_type_hints
+
+
+class AutoVivifyMixin:
+    def set_deep(self, branch_name: str, leaf_name: str, value):
+        """
+        Sets self.branch_name.leaf_name = value.
+        If self.branch_name is None, it creates it using the type hint.
+        """
+        # 1. Check if the branch (e.g., 'dev_conf') already exists
+        current_branch = getattr(self, branch_name)
+
+        if current_branch is None:
+            # 2. It's None, so we need to create it.
+            # We look at the class type hints to find out what 'dev_conf' should be.
+            hints = get_type_hints(self.__class__)
+            target_type = hints.get(branch_name)
+
+            if not target_type:
+                raise ValueError(
+                    f"Field '{branch_name}' not defined in {self.__class__.__name__}"
+                )
+
+            # 3. Handle Optional[Type] (which is effectively Union[Type, NoneType])
+            # If the type is Optional[DeveloperConf], we need to extract DeveloperConf
+            if hasattr(target_type, "__args__"):
+                # Usually the first arg is the actual class, the second is NoneType
+                target_cls = target_type.__args__[0]
+            else:
+                target_cls = target_type
+
+            # 4. Instantiate the class (assumes it has a parameter-less init)
+            current_branch = target_cls()
+            setattr(self, branch_name, current_branch)
+
+        # 5. Set the final value
+        setattr(current_branch, leaf_name, value)
 
 
 @dataclass
-class PretrainingConfig:
+class PretrainingConfig(AutoVivifyMixin):
     """Configuration for pretraining experiment."""
+
     # Model architecture
     vocab_size: int = 50257
-    embed_dim: int = 384        # Smaller for faster experiments
+    embed_dim: int = 384  # Smaller for faster experiments
     num_heads: int = 6
     num_layers: int = 6
     max_seq_len: int = 256
@@ -34,17 +80,21 @@ class PretrainingConfig:
     warmup_steps: int = training_steps // 20
     max_grad_norm: float = 1.0
     scheduler_type: str = "cosine"  # "cosine" or "plateau"
-    
+    eval_split_ratio: float = 0.1
+
     # ReduceOnPlateau specific parameters
     plateau_patience: int = 2
     plateau_factor: float = 0.5
     plateau_threshold: float = 1e-4
     plateau_cooldown: int = 0
     plateau_min_lr: float = 1e-6
-    early_stop_multiplier: int = 2  # multiplier for plateau_patience to trigger early stopping
+    early_stop_multiplier: int = (
+        2  # multiplier for plateau_patience to trigger early stopping
+    )
 
     # Evaluation
-    eval_interval: int = max(training_steps // 10, 1)
+    eval_interval: int | None = None  # If None, set in __post_init__  
+
     eval_batches: int = 100
 
     # Experiment
@@ -63,5 +113,5 @@ class PretrainingConfig:
     dendritic_stack_hidden_dim: int = 0
 
     def __post_init__(self):
-        # We'll compute these after calculating non-MLP params
-        pass
+        if self.eval_interval is None:
+            self.eval_interval = min(max(self.training_steps // 20, 1), 500)

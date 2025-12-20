@@ -253,7 +253,6 @@ class PretrainingExperiment:
         optimizer: torch.optim.Optimizer,
     ) -> TrainingResult:
         """Train a single model (Fixed: Windows Safe, Scaler, Seeding)."""
-
         # ========== 1. CUDA & PRECISION SETUP ==========
         use_cuda = torch.cuda.is_available() and device.startswith("cuda")
         if use_cuda:
@@ -270,11 +269,11 @@ class PretrainingExperiment:
             compile_mode = "default" if os.name == "nt" else "reduce-overhead"
             try:
                 logging.info(f"Compiling model with mode='{compile_mode}'...")
-                model = torch.compile(model, mode=compile_mode)
+                model = torch.compile(model, mode=compile_mode)  # type: ignore
             except Exception as e:
                 logging.warning(f"Compilation failed: {e}. Falling back to eager.")
                 if hasattr(model, "_orig_mod"):
-                    model = model._orig_mod
+                    model = model._orig_mod  # type: ignore
 
         # ========== 3. SCHEDULER ==========
         warmup_steps = int(self.config.warmup_steps)
@@ -306,10 +305,11 @@ class PretrainingExperiment:
         # Enable scaler for safety (prevents PPL explosion)
         bf16_supported = use_cuda and torch.cuda.is_bf16_supported()
         amp_dtype = torch.bfloat16 if bf16_supported else torch.float16
-        scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
+        scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)  # type: ignore
 
         # ========== 5. COHORT SCHEDULER ==========
         if self.config.cohort_scheduler is not None:
+            logging.info("Using Cohort LR Scheduler.")
             cohort_scheduler = self._create_cohort_scheduler(
                 self.config.cohort_scheduler, device
             )
@@ -337,6 +337,7 @@ class PretrainingExperiment:
 
         clip_grad_norm = self.config.max_grad_norm
         is_cosine = self.config.scheduler_type == "cosine"
+        assert isinstance(self.config.eval_interval, int)
         eval_interval = self.config.eval_interval
 
         progress = tqdm(range(training_steps), desc=f"{model_type} seed={seed}")
@@ -347,7 +348,7 @@ class PretrainingExperiment:
             input_ids, labels = next(train_iter)
 
             # Forward
-            with torch.amp.autocast("cuda", enabled=use_cuda, dtype=amp_dtype):
+            with torch.amp.autocast("cuda", enabled=use_cuda, dtype=amp_dtype):  # type: ignore
                 outputs = model(input_ids, labels=labels)
                 loss = outputs["loss"]
 
@@ -373,6 +374,7 @@ class PretrainingExperiment:
 
             # Scheduler Step
             if is_cosine:
+                assert isinstance(scheduler, torch.optim.lr_scheduler.LambdaLR)
                 scheduler.step()
 
             # Accumulate Loss (GPU resident)

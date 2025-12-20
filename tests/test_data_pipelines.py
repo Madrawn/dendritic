@@ -1,11 +1,9 @@
 import pytest
 import torch
-import numpy as np
+import dendritic.experiments.utils.PretrainingConfig
 from dendritic.dataset_handlers.BaseDatasetHandler import BaseDatasetHandler
 from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
-from dendritic.enhancement import enhance_model_with_dendritic
-from dendritic.layers.DendriticLayer import DendriticLayer
-from transformers.tokenization_utils import PreTrainedTokenizer
+from dendritic.dataset_handlers.WikiTextHandler import WikiTextHandler
 from datasets import Dataset
 from typing import Dict, Any
 import time
@@ -59,6 +57,9 @@ def mock_tokenizer():
 @pytest.fixture
 def alpaca_handler(mock_tokenizer):
     return PythonAlpacaHandler(mock_tokenizer, max_length=256)
+@pytest.fixture
+def wikitext_handler(mock_tokenizer):
+    return WikiTextHandler(mock_tokenizer, max_length=256)
 
 
 @pytest.fixture
@@ -82,6 +83,28 @@ def sample_dataset_dict():
                     "### Instruction:\nWrite a function to multiply two numbers\n### Input:\nNone\n### Output:"
                 ],
                 "output": ["def multiply(a, b): return a * b"],
+            }
+        ),
+    }
+
+
+@pytest.fixture
+def sample_text_dataset():
+    return {
+        "train": Dataset.from_dict(
+            {
+                "text": [
+                    sample_dataset_dict()["train"][i]["prompt"] + " " + sample_dataset_dict()["train"][i]["output"]
+                    for i in range(len(sample_dataset_dict()["train"]))
+                ]
+            }
+        ),
+        "test": Dataset.from_dict(
+            {
+                "text": [
+                    sample_dataset_dict()["test"][i]["prompt"] + " " + sample_dataset_dict()["test"][i]["output"]
+                    for i in range(len(sample_dataset_dict()["test"]))
+                ]
             }
         ),
     }

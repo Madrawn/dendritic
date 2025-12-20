@@ -2,8 +2,6 @@
 Tests for the flexible cohort scheduler refactor.
 """
 
-import builtins
-from copy import deepcopy
 from unittest import mock
 
 import pytest
@@ -13,7 +11,7 @@ from dendritic.experiments.utils.PretrainingConfig import (
     CohortSchedulerConfig,
 )
 from dendritic.experiments.utils.sweep import generate_scheduler_variants
-from dendritic.experiments.run_experiments import _variant_identifier, run_pretraining_experiment
+from dendritic.experiments.run_experiments import run_pretraining_experiment
 
 
 @pytest.mark.unit
@@ -43,7 +41,8 @@ def test_generate_scheduler_variants():
         batch_size=2,
         seeds=[1],
     )
-    param_grid = {"min_mult": [0.4, 0.5], "max_mult": [0.9, 1.0]}
+    assert base_cfg.cohort_scheduler is None # Should be None by default
+    param_grid = {"cohort_scheduler.min_mult": [0.4, 0.5], "cohort_scheduler.max_mult": [0.9, 1.0]}
     variants = generate_scheduler_variants(base_cfg, param_grid)
 
     # 2 * 2 = 4 combinations
@@ -51,20 +50,10 @@ def test_generate_scheduler_variants():
     for v in variants:
         assert isinstance(v.cohort_scheduler, CohortSchedulerConfig)
         # Ensure the values come from the grid
-        assert v.cohort_scheduler.min_mult in param_grid["min_mult"]
-        assert v.cohort_scheduler.max_mult in param_grid["max_mult"]
+        assert v.cohort_scheduler.min_mult in param_grid["cohort_scheduler.min_mult"]
+        assert v.cohort_scheduler.max_mult in param_grid["cohort_scheduler.max_mult"]
 
 
-@pytest.mark.unit
-def test_variant_identifier():
-    """Validate the human‑readable identifier generation."""
-    cfg_no_sched = PretrainingConfig(training_steps=10, batch_size=2, seeds=[1])
-    assert _variant_identifier(cfg_no_sched) == "no_scheduler"
-
-    scheduler_cfg = CohortSchedulerConfig(min_mult=0.4, max_mult=0.9)
-    cfg_with_sched = deepcopy(cfg_no_sched)
-    cfg_with_sched.cohort_scheduler = scheduler_cfg
-    assert _variant_identifier(cfg_with_sched) == "min0.4_max0.9_sharp1.0"
 
 
 @pytest.mark.unit
@@ -80,7 +69,7 @@ def test_run_pretraining_experiment_multiple_variants(monkeypatch):
         batch_size=1,
         seeds=[1],
     )
-    param_grid = {"min_mult": [0.4], "max_mult": [0.9]}
+    param_grid = {"cohort_scheduler.min_mult": [0.4], "cohort_scheduler.max_mult": [0.9]}
     variants = generate_scheduler_variants(base_cfg, param_grid)
 
     # Mock ExperimentResults to return a simple object

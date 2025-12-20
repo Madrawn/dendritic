@@ -17,11 +17,15 @@ import os
 from datetime import datetime
 from pathlib import Path
 import random
+from typing import Any
 import numpy as np
 
 # Third‑party imports
 import torch
-torch.backends.cuda.matmul.fp32_precision = 'ieee'
+
+from dendritic.experiments.utils.param_utils import find_matching_hidden_dims
+
+torch.backends.cuda.matmul.fp32_precision = "ieee"
 # torch.set_float32_matmul_precision('medium')
 # torch.set_float32_matmul_precision('high')
 from torch.utils.data import DataLoader
@@ -46,11 +50,10 @@ logger = logging.getLogger(__name__)
 
 def run_pretraining_experiment(
     device: str,
+    base_config: PretrainingConfig,
     num_workers: int | None = None,
     scheduler_variants: list[PretrainingConfig] | None = None,
     param_grid: dict | None = None,
-    base_config: PretrainingConfig | None = None,
-    dataset: str = "wikitext",
 ) -> dict[str, ExperimentResults]:
     """Run the pretraining experiment across configured seeds.
 
@@ -64,9 +67,11 @@ def run_pretraining_experiment(
     scheduler_variants : list[PretrainingConfig] | None, optional
         List of configuration variants to run. If None, a single default config is used.
     param_grid : dict | None, optional
-        Mapping of CohortSchedulerConfig field names to lists of values to sweep over.
-        If provided, generates scheduler_variants via Cartesian product.
-        Example: {"min_mult": [0.4, 0.5], "sharpness": [1.0, 2.0]}
+        Mapping of field names to lists of values to sweep over.
+        Field names can be dot‑separated to target nested attributes (e.g.,
+        "dropout" or "cohort_scheduler.min_mult").
+        If provided, generates configuration variants via Cartesian product.
+        Example: {"dropout": [0.0, 0.3], "cohort_scheduler.min_mult": [0.2, 0.3]}
     base_config : PretrainingConfig | None, optional
         Base configuration to use. If None, a default config is created.
 
@@ -75,26 +80,15 @@ def run_pretraining_experiment(
     dict[str, ExperimentResults]
         Mapping from variant identifier to experiment results.
     """
-    from dendritic.experiments.utils.experiment_pretraining import (PretrainingExperiment, ModelVariant)
+    from dendritic.experiments.utils.experiment_pretraining import (
+        PretrainingExperiment,
+        ModelVariant,
+    )
     from dendritic.experiments.utils.sweep import generate_scheduler_variants
 
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
 
-    training_steps_count = 6000
-    # Base configuration (used when no variants are supplied)
-    if base_config is None:
-        base_config = PretrainingConfig(
-            training_steps=training_steps_count,
-            batch_size=20,
-            eval_interval=min(max(training_steps_count // 20, 1), 500),
-            seeds=[24],  # Use fewer seeds for faster testing,
-            scheduler_type="cosine",
-            plateau_threshold=0.001,
-            dataset=dataset,
-        )
-    else:
-        base_config.dataset = dataset
     # Determine which configs to run
     if param_grid is not None:
         variants = generate_scheduler_variants(base_config, param_grid)
@@ -105,40 +99,23 @@ def run_pretraining_experiment(
 
     results_by_variant: dict[str, ExperimentResults] = {}
 
-    # Separate baseline config (cohort_scheduler = None) from scheduler variants
-    baseline_config = base_config
-    scheduler_variants_list = [cfg for cfg in variants if cfg.cohort_scheduler is not None]
-    
-    if len(scheduler_variants_list) == 0:
-        # No scheduler variants: run the original experiment (baseline vs baseline_wave)
-        logger.info("Training no_scheduler variant (baseline vs baseline_wave)")
-        results = _train_config_with_models(
-            baseline_config, ["baseline", "baseline_wave"], device, num_workers, tokenizer
-        )
-        results_by_variant["no_scheduler"] = results
-    else:
-        # We have scheduler variants: run baseline once, then baseline_wave for each variant
-        if baseline_config.cohort_scheduler is None:
-            variant_id = _variant_identifier(baseline_config)
-            logger.info(f"Training baseline variant ({variant_id})")
-            baseline_results = _train_config_with_models(
-                baseline_config, ["baseline"], device, num_workers, tokenizer
-            )
-            results_by_variant["baseline"] = baseline_results
+    scheduler_variants_list = [cfg for cfg in variants]
 
-        for cfg in scheduler_variants_list:
-            variant_id = _variant_identifier(cfg)
-            logger.info(f"Training variant: {variant_id}")
-            wave_results = _train_config_with_models(
-                cfg, ["baseline_wave"], device, num_workers, tokenizer
-            )
-            results_by_variant[variant_id] = wave_results
+    for cfg in scheduler_variants_list:
+        logger.info(f"Pretraining config: {cfg}")
+        variant_id = _variant_identifier(param_grid)
+        logger.info(f"Training variant: {variant_id}")
+        wave_results = _train_config_with_models(
+            cfg, ["baseline"], device, num_workers, tokenizer
+        )
+        results_by_variant[variant_id] = wave_results
 
     # Save consolidated results
     from dendritic.experiments.analysis.analysis import (
         save_consolidated_results,
         print_consolidated_summary,
     )
+
     output_dir = Path(base_config.output_dir)
     save_consolidated_results(results_by_variant, output_dir)
     print_consolidated_summary(results_by_variant)
@@ -204,9 +181,21 @@ def main() -> None:
         logger.info("\n" + "=" * 70)
         logger.info("RUNNING PRETRAINING EXPERIMENT")
         logger.info("=" * 70)
-        param_grid = {"min_mult": [0.3, 0.5, 0.7], "sharpness": [1.0, 2.0, 3.0]}
-
-        run_pretraining_experiment(args.device, args.num_workers, param_grid=param_grid, dataset=args.dataset)
+        param_grid = {"dropout": [0.1, 0.0]}  # Example: sweep over dropout values
+        base_config = PretrainingConfig(
+            training_steps=6,
+            batch_size=20,
+            seeds=[24],  # Use fewer seeds for faster testing,
+            scheduler_type="cosine",
+            plateau_threshold=0.001,
+            dataset=args.dataset,
+        )
+        run_pretraining_experiment(
+            device=args.device,
+            base_config=base_config,
+            num_workers=args.num_workers,
+            param_grid=param_grid,
+        )
 
     if args.experiment in ["finetuning", "both"]:
         logger.info("\n" + "=" * 70)
@@ -303,7 +292,9 @@ def setup_logging(log_level: int | None = None) -> logging.Logger:
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
     # Remove existing stream handlers to avoid duplicates
-    root_stream_handlers = [h for h in root_logger.handlers if isinstance(h, logging.StreamHandler)]
+    root_stream_handlers = [
+        h for h in root_logger.handlers if isinstance(h, logging.StreamHandler)
+    ]
     for h in root_stream_handlers:
         root_logger.removeHandler(h)
     # Add a single stream handler if none exist
@@ -521,8 +512,16 @@ def load_pretraining_data(
     return train_dataloader, eval_dataloader
 
 # Helper to create a human‑readable identifier for a config variant
-def _variant_identifier(cfg: PretrainingConfig) -> str:
+def _variant_identifier(param_grid: dict[str, Any] | None) -> str:
     """Generate a concise identifier based on the cohort scheduler configuration."""
+
+    return (
+        "-".join(f"{k}:{v}" for k, v in param_grid.items())
+        if param_grid
+        else "baseline"
+    )
+
+
     if cfg.cohort_scheduler is None:
         return "no_scheduler"
     cs = cfg.cohort_scheduler
@@ -629,12 +628,12 @@ def _train_config_with_models(
     tokenizer: GPT2Tokenizer,
 ) -> ExperimentResults:
     """Train specified models under a single configuration."""
-    from dendritic.experiments.utils.experiment_pretraining import PretrainingExperiment, ModelVariant
+    from dendritic.experiments.utils.experiment_pretraining import (
+        PretrainingExperiment,
+        ModelVariant,
+    )
 
     experiment = PretrainingExperiment(config=config)
-    logger.info(f"Pretraining config: {config}")
-    variant_id = _variant_identifier(config)
-    logger.info(f"Variant identifier: {variant_id}")
 
     train_dl, eval_dl = load_pretraining_data(
         tokenizer,
@@ -642,23 +641,13 @@ def _train_config_with_models(
         max_length=config.max_seq_len,
         num_workers=num_workers,
     )
-
-    # Create fresh models for each seed
-    baseline_model, dendritic_model, stack_model, baseline_wave_model = (
-        experiment.create_models()
+    baseline_hidden, dendritic_hidden, stack_hidden = find_matching_hidden_dims(
+        experiment.config
     )
-
-    # Map model names to actual model instances
-    model_map = {
-        "baseline": baseline_model,
-        "baseline_wave": baseline_wave_model,
-        "dendritic": dendritic_model,
-        "stack": stack_model,
-    }
 
     model_variants = []
     for name in model_names:
-        model = model_map[name]
+        model = experiment._build_model(hidden_dim=baseline_hidden, mlp_type=name, dropout=experiment.config.dropout, poly_rank=experiment.config.poly_rank if "dendritic" in name else None)  # type: ignore
         model_variants.append(
             ModelVariant(
                 name=name,
@@ -669,7 +658,7 @@ def _train_config_with_models(
                     lr=experiment.config.learning_rate,  # type: ignore
                     weight_decay=experiment.config.weight_decay,  # type: ignore
                     betas=(0.9, 0.95),
-                    fused=True
+                    fused=True,
                 ),
             )
         )
