@@ -1,6 +1,8 @@
 # dendritic/experiments/visualization.py
 """Visualization utilities for experiment results."""
 import json
+import glob
+import os
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -185,10 +187,10 @@ def plot_pretraining_curves(results: dict, axes):
             stds.append(analysis[model_key]["final_ppl_std"])
             colors.append(config["bar_color"])
 
-    bars = ax2.bar(methods, means, yerr=stds, capsize=5, color=colors, alpha=0.7)
-    ax2.tick_params(axis="x", rotation=45, ha="right")
+    bars = ax2.barh(methods, means, xerr=stds, capsize=5, color=colors, alpha=0.7)
+    ax2.tick_params(axis="y")
 
-    ax2.set_ylabel("Final Perplexity")
+    ax2.set_xlabel("Final Perplexity")
     ax2.set_title("Final Performance Comparison")
 
     # Significance annotations
@@ -370,9 +372,31 @@ def save_markdown_table(result_path: str, md_path: str, points: int = 10):
     print(f"Markdown table saved to {md_path}")
 
 
+def get_newest_file(path: str, pattern: str) -> str | None:
+    """
+    Return the name of the newest file matching the glob pattern in the given path.
+
+    Args:
+        path: Directory to search in.
+        pattern: Glob pattern (e.g., '*.json')
+    Returns:
+        The path to the newest file, or None if no files match.
+    """
+    search_pattern = f"{path}/**/{pattern}"
+    files = glob.glob(search_pattern)
+    if not files:
+        return None
+    newest = max(files, key=os.path.getmtime)
+    return newest
+
+
 if __name__ == "__main__":
     pretraining_experiment_results_path = (
-        r"results\pretraining_comparison\new_format_pretraining_experiment.json"
+        get_newest_file(r"E:/Users/yasok/source/repos/dendritic/results", "*.json")
+    )
+    assert pretraining_experiment_results_path is not None
+    print(
+        f"Visualizing pretraining results from {pretraining_experiment_results_path}"
     )
     plot_training_curves(
         pretraining_experiment_results_path,
