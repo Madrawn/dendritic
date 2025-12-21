@@ -167,8 +167,8 @@ class DendriticStack(nn.Module):
         
         # k-way product → degree-k polynomial
         poly = F.linear(x, self.projections[0])
-        for w in self.projections[1:]:
-            poly = poly * F.linear(x, w)
+        for i in range(1, len(self.projections)):
+            poly = poly * F.linear(x, self.projections[i])
         
         out = out + self.scale * F.linear(poly, self.poly_out)
         
