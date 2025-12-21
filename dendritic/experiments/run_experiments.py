@@ -10,6 +10,7 @@ Usage:
 
 # Standard library imports
 import argparse
+from calendar import c
 import logging
 import multiprocessing
 import os
@@ -31,7 +32,10 @@ from torch.utils.data import DataLoader
 from transformers.models.gpt2 import GPT2Tokenizer
 
 # Project‑specific imports
-from dendritic.experiments.utils.PretrainingConfig import CohortSchedulerConfig, PretrainingConfig
+from dendritic.experiments.utils.PretrainingConfig import (
+    CohortSchedulerConfig,
+    PretrainingConfig,
+)
 from dendritic.experiments.utils.ExperimentResults import ExperimentResults
 from dendritic.experiments.utils.experiment_finetuning import (
     FinetuningConfig,
@@ -100,9 +104,7 @@ def run_pretraining_experiment(
         logger.info(f"Pretraining config: {cfg}")
         variant_id = _variant_identifier(cfg.param_grid)
         logger.info(f"Training variant: {variant_id}")
-        wave_results = _train_config_with_models(
-            cfg, ["baseline"], device, num_workers, tokenizer
-        )
+        wave_results = _train_config_with_models(cfg, device, num_workers, tokenizer)
         results_by_variant[variant_id] = wave_results
 
     # Save consolidated results
@@ -170,13 +172,13 @@ def main() -> None:
         logger.info("\n" + "=" * 70)
         logger.info("RUNNING PRETRAINING EXPERIMENT")
         logger.info("=" * 70)
-        param_grid = {"cohort_scheduler.min_mult": [None, 0.0], "layer_type": ["standard", "dendritic"]}  # Example: sweep over dropout values
+        param_grid = {
+            "cohort_scheduler.min_mult": [None, 0.0],
+            "layer_type": ["standard", "dendritic"],
+        }  # Example: sweep over dropout values
         base_config = PretrainingConfig(
-            training_steps=60,
-            batch_size=20,
+            # training_steps=60,
             seeds=[24],  # Use fewer seeds for faster testing,
-            scheduler_type="cosine",
-            plateau_threshold=0.001,
         )
         run_pretraining_experiment(
             device=args.device,
@@ -191,6 +193,7 @@ def main() -> None:
         run_finetuning_experiment_wrapper(args.device, args.num_workers)
 
     logger.info("\nAll experiments complete!")
+
 
 def run_finetuning_experiment_wrapper(
     device: str, num_workers: int | None = None
@@ -217,7 +220,7 @@ def run_finetuning_experiment_wrapper(
     tokenizer.pad_token = tokenizer.eos_token
 
     config = FinetuningConfig(
-        training_steps=3000, batch_size=4, eval_interval=250, seeds=[42, 71, 123]
+        training_steps=30, batch_size=4, eval_interval=250, seeds=[42, 71, 123]
     )
 
     train_dl, eval_dl = load_finetuning_data(
@@ -333,7 +336,6 @@ def debug_dataset_integrity(
     logger.debug("!" * 40 + "\n")
 
 
-
 # Helper to create a human‑readable identifier for a config variant
 def _variant_identifier(param_grid: dict[str, Any] | None) -> str:
     """Generate a concise identifier based on the cohort scheduler configuration."""
@@ -343,7 +345,6 @@ def _variant_identifier(param_grid: dict[str, Any] | None) -> str:
         if param_grid
         else "baseline"
     )
-
 
     if cfg.cohort_scheduler is None:
         return "no_scheduler"
@@ -441,11 +442,8 @@ def load_finetuning_data(
     return train_dataloader, eval_dataloader
 
 
-
-
 def _train_config_with_models(
     config: PretrainingConfig,
-    model_names: list[str],
     device: str,
     num_workers: int | None,
     tokenizer: GPT2Tokenizer,
@@ -465,27 +463,19 @@ def _train_config_with_models(
     train_dl = dataloaders["train"]
     eval_dl = dataloaders["eval"]
 
-    baseline_hidden, dendritic_hidden, stack_hidden = find_matching_hidden_dims(
-        experiment.config
+    model = experiment._build_model(mlp_type=experiment.config.layer_type, dropout=experiment.config.dropout)  # type: ignore
+    model_variant = ModelVariant(
+        name=config.layer_type,
+        model=model,
+        results=[],
+        optimizer=torch.optim.AdamW(
+            model.parameters(),
+            lr=experiment.config.learning_rate,  # type: ignore
+            weight_decay=experiment.config.weight_decay,  # type: ignore
+            betas=(0.9, 0.95),
+            fused=True,
+        ),
     )
-
-    model_variants = []
-    for name in model_names:
-        model = experiment._build_model(hidden_dim=baseline_hidden, mlp_type=name, dropout=experiment.config.dropout, poly_rank=experiment.config.poly_rank if "dendritic" in name else None)  # type: ignore
-        model_variants.append(
-            ModelVariant(
-                name=name,
-                model=model,
-                results=[],
-                optimizer=torch.optim.AdamW(
-                    model.parameters(),
-                    lr=experiment.config.learning_rate,  # type: ignore
-                    weight_decay=experiment.config.weight_decay,  # type: ignore
-                    betas=(0.9, 0.95),
-                    fused=True,
-                ),
-            )
-        )
 
     try:
         # Ensure deterministic behavior for each seed
@@ -493,7 +483,7 @@ def _train_config_with_models(
         for seed in experiment.config.seeds:
             set_random_seed(seed)
             results = experiment.run(
-                train_dl, eval_dl, model_variants=model_variants, device=device
+                train_dl, eval_dl, model_variants=[model_variant], device=device
             )
             torch._dynamo.reset()
     finally:

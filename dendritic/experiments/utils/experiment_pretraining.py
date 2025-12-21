@@ -16,24 +16,25 @@ Key controls:
 import logging
 import os
 import time
-from typing import cast
+from typing import Generator, Literal
 import torch
+from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
 # torch.set_float32_matmul_precision('high')
 
 from pathlib import Path
 from dataclasses import dataclass, field
 
+from transformers import GPT2LMHeadModel
+
 from dendritic.experiments.analysis.analysis import (
     analyze_results,
-    print_experiment_summary,
-    save_experiment_results,
 )
 from dendritic.experiments.models.MiniGPT import MiniGPT
 
 from .PretrainingConfig import PretrainingConfig, CohortSchedulerConfig
 
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 
@@ -101,14 +102,17 @@ class PretrainingExperiment:
 
     def _build_model(
         self,
-        hidden_dim: int,
-        mlp_type: str,
+        mlp_type: Literal["standard", "dendritic"],
         dropout: float,
         poly_rank: int | None = None,
     ) -> MiniGPT:
         """
         Helper to construct a MiniGPT model with given parameters.
         """
+        baseline_hidden, dendritic_hidden = find_matching_hidden_dims(self.config)
+        hidden_dim = {"standard": baseline_hidden, "dendritic": dendritic_hidden}[
+            mlp_type
+        ]
         return MiniGPT(
             vocab_size=self.config.vocab_size,
             embed_dim=self.config.embed_dim,
@@ -122,69 +126,6 @@ class PretrainingExperiment:
         )
 
     # Remove duplicate _build_model (the class method is already defined)
-
-    def create_models(self) -> tuple[MiniGPT, MiniGPT, MiniGPT, MiniGPT]:
-        """
-        Create baseline, dendritic, and stack models with matched parameters.
-        Stores hidden dimensions on the instance for later use.
-        """
-        baseline_hidden, dendritic_hidden, stack_hidden = find_matching_hidden_dims(
-            self.config
-        )
-
-        logging.info(f"Baseline hidden dim: {baseline_hidden}")
-        logging.info(f"Dendritic hidden dim: {dendritic_hidden}")
-        logging.info(f"Dendritic Stack hidden dim: {stack_hidden}")
-
-        baseline_model = self._build_model(
-            hidden_dim=baseline_hidden,
-            mlp_type="baseline",
-            dropout=self.config.dropout,
-        )
-        baseline_wave_model = self._build_model(
-            hidden_dim=baseline_hidden,
-            mlp_type="baseline_wave",
-            dropout=0,
-        )
-        dendritic_model = self._build_model(
-            hidden_dim=dendritic_hidden,
-            mlp_type="dendritic",
-            dropout=self.config.dropout,
-            poly_rank=self.config.poly_rank,
-        )
-        stack_model = self._build_model(
-            hidden_dim=stack_hidden,
-            mlp_type="dendritic_stack",
-            dropout=self.config.dropout,
-            poly_rank=self.config.poly_rank,
-        )
-
-        # Verify parameter matches
-        from .param_utils import verify_param_match
-
-        matched, details = verify_param_match(
-            baseline_model, dendritic_model, tolerance=0.02
-        )
-        logging.info(
-            f"Baseline vs Dendritic: {matched} (diff: {details['relative_diff']:.2%})"
-        )
-
-        matched_stack, details_stack = verify_param_match(
-            baseline_model, stack_model, tolerance=0.02
-        )
-        logging.info(
-            f"Baseline vs DendriticStack: {matched_stack} (diff: {details_stack['relative_diff']:.2%})"
-        )
-
-        if not matched or not matched_stack:
-            logging.warning("Parameters not matched within 2% tolerance!")
-
-        # Store hidden dimensions on the instance
-        self.baseline_hidden = baseline_hidden
-        self.dendritic_hidden = dendritic_hidden
-        self.stack_hidden = stack_hidden
-
-        return baseline_model, dendritic_model, stack_model, baseline_wave_model
 
     def prefetching_cycle(self, dataloader, device):
         """
@@ -261,7 +202,7 @@ class PretrainingExperiment:
             torch.backends.cudnn.allow_tf32 = True
             torch.backends.cudnn.benchmark = True
 
-        model = model.to(device)
+        model: GPT2LMHeadModel = model.to(device)  # type: ignore
 
         # ========== 2. COMPILATION ==========
         # Windows -> default, Linux -> reduce-overhead
@@ -325,13 +266,13 @@ class PretrainingExperiment:
 
         # Use the robust prefetcher
         train_iter = self.prefetching_cycle(train_dataloader, device)
+        eval_iter = self.prefetching_cycle(eval_dataloader, device)
 
         # ========== 7. TRAINING STATE ==========
         best_eval_loss = float("inf")
         no_improvement_count = 0
         loss_history = []
 
-        total_train_loss_tensor = torch.tensor(0.0, device=device)
         logging_step_count = 0
         start_time = time.time()
 
@@ -342,16 +283,21 @@ class PretrainingExperiment:
 
         progress = tqdm(range(training_steps), desc=f"{model_type} seed={seed}")
         model.train()
-
+        # Initialize a placeholder before the loop
+        queued_loss = None
+        avg_train_loss_tensor = torch.tensor(99.0, device='cpu')
+        avg_eval_loss = 99.0
         for step in progress:
             # Robust fetch (handles Windows iterator reset internally)
             input_ids, labels = next(train_iter)
 
             # Forward
             with torch.amp.autocast("cuda", enabled=use_cuda, dtype=amp_dtype):  # type: ignore
-                outputs = model(input_ids, labels=labels)
+                outputs: dict = model.forward(input_ids, labels=labels)  # type: ignore
+
                 loss = outputs["loss"]
 
+            assert loss is not None, "Loss is None during training."
             # Backward
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -378,40 +324,58 @@ class PretrainingExperiment:
                 scheduler.step()
 
             # Accumulate Loss (GPU resident)
-            total_train_loss_tensor += loss.detach()
-            logging_step_count += 1
+            avg_train_loss_tensor = (
+                avg_train_loss_tensor * 0.9 + 0.1 * loss.detach().cpu()
+            )
+            # logging_step_count += 1
 
             # Update Progress Bar (Periodic Sync)
-            if step % 100 == 0:
-                current_loss = loss.item()
-                lr_curr = optimizer.param_groups[0]["lr"]
-                progress.set_postfix(
-                    {"loss": f"{current_loss:.4f}", "lr": f"{lr_curr:.6f}"}
-                )
+            if step % 10 == 0:
+                current_loss_tensor = loss.detach().cpu()
+                if queued_loss is not None:
+                    # This .item() will be instant
+                    progress.set_postfix(
+                        {
+                            "loss": f"{queued_loss.item():.4f}",
+                            "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
+                        }
+                    )
+
+                # 3. Update the queue
+                queued_loss = current_loss_tensor
 
             # Evaluation Loop
             if (step + 1) % eval_interval == 0:
-                avg_train_loss = total_train_loss_tensor.item() / logging_step_count
-                total_train_loss_tensor.zero_()
-                logging_step_count = 0
+                avg_train_loss = avg_train_loss_tensor.item()  # / logging_step_count
+                # avg_train_loss_tensor.zero_()
+                # logging_step_count = 0
 
                 model.eval()
                 with torch.no_grad():
                     eval_loss = self.evaluate(
-                        model, eval_dataloader, self.config.eval_batches, device
+                        model, eval_iter, self.config.eval_batches, device
                     )
                 model.train()
 
+                avg_eval_loss = avg_eval_loss * 0.9 + 0.1 * eval_loss
                 perplexity = np.exp(eval_loss)
 
-                if eval_loss < best_eval_loss:
-                    best_eval_loss = eval_loss
+                if avg_eval_loss < best_eval_loss:
+                    best_eval_loss = avg_eval_loss
                     no_improvement_count = 0
                 else:
                     no_improvement_count += 1
 
                 if not is_cosine:
-                    scheduler.step(eval_loss)
+                    assert isinstance(
+                        scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau
+                    )
+                    rel_epsilon = 1.0 - scheduler.threshold
+                    target = scheduler.best * rel_epsilon
+                    logging.info(
+                        f"target:{target} threshold_mode:{scheduler.threshold_mode} threshold:{scheduler.threshold} is_better:{scheduler._is_better(eval_loss, scheduler.best)} bad_epochs{scheduler.num_bad_epochs}"
+                    )
+                    scheduler.step(avg_eval_loss)
 
                 loss_history.append(
                     {
@@ -442,7 +406,7 @@ class PretrainingExperiment:
         # Final Eval
         model.eval()
         with torch.no_grad():
-            final_eval_loss = self.evaluate(model, eval_dataloader, None, device)
+            final_eval_loss = self.evaluate(model, eval_iter, None, device)
 
         from dendritic.enhancement import get_polynomial_stats
 
@@ -465,7 +429,7 @@ class PretrainingExperiment:
     def evaluate(
         self,
         model: torch.nn.Module,
-        dataloader: DataLoader,
+        dataloader: Generator,
         max_batches: int | None,
         device: str,
     ) -> float:
@@ -475,13 +439,13 @@ class PretrainingExperiment:
         total_tokens = 0
 
         with torch.no_grad():
-            for i, batch in enumerate(dataloader):
+            i = 0
+            for input_ids, labels in dataloader:
                 if max_batches and i >= max_batches:
                     break
-
-                input_ids = batch["input_ids"].to(device)
-                labels = batch["labels"].to(device)
-
+                i += 1
+                input_ids = input_ids.to(device)
+                labels = labels.to(device)
                 outputs = model(input_ids, labels=labels)
 
                 # Count non-masked tokens
