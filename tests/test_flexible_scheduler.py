@@ -41,8 +41,11 @@ def test_generate_scheduler_variants():
         batch_size=2,
         seeds=[1],
     )
-    assert base_cfg.cohort_scheduler is None # Should be None by default
-    param_grid = {"cohort_scheduler.min_mult": [0.4, 0.5], "cohort_scheduler.max_mult": [0.9, 1.0]}
+    assert base_cfg.cohort_scheduler is None  # Should be None by default
+    param_grid = {
+        "cohort_scheduler.min_mult": [0.4, 0.5],
+        "cohort_scheduler.max_mult": [0.9, 1.0],
+    }
     variants = generate_scheduler_variants(base_cfg, param_grid)
 
     # 2 * 2 = 4 combinations
@@ -54,8 +57,6 @@ def test_generate_scheduler_variants():
         assert v.cohort_scheduler.max_mult in param_grid["cohort_scheduler.max_mult"]
 
 
-
-
 @pytest.mark.unit
 def test_run_pretraining_experiment_multiple_variants(monkeypatch):
     """
@@ -63,13 +64,17 @@ def test_run_pretraining_experiment_multiple_variants(monkeypatch):
     to avoid heavy training.
     """
     import torch
+
     # Minimal base config
+    param_grid = {
+        "cohort_scheduler.min_mult": [0.4, 0.2],
+        "cohort_scheduler.max_mult": [0.9],
+    }
     base_cfg = PretrainingConfig(
         training_steps=1,
         batch_size=1,
         seeds=[1],
     )
-    param_grid = {"cohort_scheduler.min_mult": [0.4], "cohort_scheduler.max_mult": [0.9]}
     variants = generate_scheduler_variants(base_cfg, param_grid)
 
     # Mock ExperimentResults to return a simple object
@@ -79,7 +84,7 @@ def test_run_pretraining_experiment_multiple_variants(monkeypatch):
     dummy_result.config = variants[0]
 
     # Create a mock model with parameters to avoid empty optimizer
-    def create_mock_model():
+    def create_mock_model() -> mock.MagicMock:
         model = mock.MagicMock()
         # Add a dummy parameter
         dummy_param = torch.nn.Parameter(torch.tensor(1.0))
@@ -95,22 +100,32 @@ def test_run_pretraining_experiment_multiple_variants(monkeypatch):
         def run(self, *args, **kwargs):
             return dummy_result
 
+        def _build_model(self, *args, **kwargs):
+            return create_mock_model()
+
         def create_models(self):
             # Return dummy models with parameters
-            return (create_mock_model(), create_mock_model(), create_mock_model(), create_mock_model())
+            return (
+                create_mock_model(),
+                create_mock_model(),
+                create_mock_model(),
+                create_mock_model(),
+            )
 
     monkeypatch.setattr(
         "dendritic.experiments.utils.experiment_pretraining.PretrainingExperiment",
         DummyExperiment,
     )
-    
+
     # Mock torch.optim.AdamW to avoid empty parameter list error
     mock_optimizer = mock.MagicMock()
+
     def mock_adamw(params, **kwargs):
         if len(params) == 0:
             # If params empty, add a dummy parameter
             params = [torch.nn.Parameter(torch.tensor(1.0))]
         return mock_optimizer
+
     monkeypatch.setattr(torch.optim, "AdamW", mock_adamw)
 
     # Mock load_pretraining_data to avoid real dataset loading
@@ -119,11 +134,13 @@ def test_run_pretraining_experiment_multiple_variants(monkeypatch):
         class DummyDataset(torch.utils.data.Dataset):
             def __len__(self):
                 return 10  # non-zero
+
             def __getitem__(self, idx):
                 return {
                     "input_ids": torch.randint(0, config.vocab_size, (max_length,)),
                     "labels": torch.randint(0, config.vocab_size, (max_length,)),
                 }
+
         train_dataset = DummyDataset()
         eval_dataset = DummyDataset()
         train_dataloader = torch.utils.data.DataLoader(
@@ -133,12 +150,7 @@ def test_run_pretraining_experiment_multiple_variants(monkeypatch):
             eval_dataset, batch_size=config.batch_size, shuffle=False
         )
         return train_dataloader, eval_dataloader
-    
-    monkeypatch.setattr(
-        "dendritic.experiments.run_experiments.load_pretraining_data",
-        mock_load_pretraining_data,
-    )
-    
+
     # Mock analysis functions to avoid side effects
     monkeypatch.setattr(
         "dendritic.experiments.analysis.analysis.save_consolidated_results",
@@ -149,12 +161,20 @@ def test_run_pretraining_experiment_multiple_variants(monkeypatch):
         mock.MagicMock(),
     )
 
-    results = run_pretraining_experiment(device="cpu", scheduler_variants=variants)
+    results = run_pretraining_experiment(
+        base_config=base_cfg,
+        device="cpu",
+        scheduler_variants=variants,
+        param_grid=param_grid,
+    )
 
-    # Should contain two entries: baseline (no scheduler) and the scheduler variant
+    # Should contain 1 entry: the scheduler variant
     assert isinstance(results, dict)
     assert len(results) == 2
-    expected_keys = {"baseline", "min0.4_max0.9_sharp1.0"}
+    expected_keys = {
+        "cohort_scheduler.min_mult:0.2-cohort_scheduler.max_mult:0.9",
+        "cohort_scheduler.min_mult:0.4-cohort_scheduler.max_mult:0.9",
+    }
     assert set(results.keys()) == expected_keys
     for key in expected_keys:
         assert results[key] is dummy_result

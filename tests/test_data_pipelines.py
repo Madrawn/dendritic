@@ -57,6 +57,8 @@ def mock_tokenizer():
 @pytest.fixture
 def alpaca_handler(mock_tokenizer):
     return PythonAlpacaHandler(mock_tokenizer, max_length=256)
+
+
 @pytest.fixture
 def wikitext_handler(mock_tokenizer):
     return WikiTextHandler(mock_tokenizer, max_length=256)
@@ -70,19 +72,22 @@ def sample_dataset_dict():
                 "prompt": [
                     "### Instruction:\nWrite a function to add two numbers\n### Input:\nNone\n### Output:",
                     "### Instruction:\nWrite a function to subtract numbers\n### Input:\nNone\n### Output:",
-                ],
+                ]
+                * 50,
                 "output": [
                     "def add(a, b): return a + b",
                     "def subtract(a, b): return a - b",
-                ],
+                ]
+                * 50,
             }
         ),
         "test": Dataset.from_dict(
             {
                 "prompt": [
                     "### Instruction:\nWrite a function to multiply two numbers\n### Input:\nNone\n### Output:"
-                ],
-                "output": ["def multiply(a, b): return a * b"],
+                ]
+                * 50,
+                "output": ["def multiply(a, b): return a * b"] * 50,
             }
         ),
     }
@@ -94,7 +99,9 @@ def sample_text_dataset():
         "train": Dataset.from_dict(
             {
                 "text": [
-                    sample_dataset_dict()["train"][i]["prompt"] + " " + sample_dataset_dict()["train"][i]["output"]
+                    sample_dataset_dict()["train"][i]["prompt"]
+                    + " "
+                    + sample_dataset_dict()["train"][i]["output"]
                     for i in range(len(sample_dataset_dict()["train"]))
                 ]
             }
@@ -102,7 +109,9 @@ def sample_text_dataset():
         "test": Dataset.from_dict(
             {
                 "text": [
-                    sample_dataset_dict()["test"][i]["prompt"] + " " + sample_dataset_dict()["test"][i]["output"]
+                    sample_dataset_dict()["test"][i]["prompt"]
+                    + " "
+                    + sample_dataset_dict()["test"][i]["output"]
                     for i in range(len(sample_dataset_dict()["test"]))
                 ]
             }
@@ -228,7 +237,7 @@ def test_input_validation(alpaca_handler, sample_dataset_dict):
     # Test with malformed data
     malformed_data = sample_dataset_dict.copy()
     malformed_data["train"] = malformed_data["train"].add_column(
-        "invalid_column", [1, 2]
+        "invalid_column", [1, 2] * 50
     )
 
     alpaca_handler.load_data = lambda **kwargs: malformed_data
