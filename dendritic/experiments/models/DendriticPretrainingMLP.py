@@ -14,17 +14,19 @@ class DendriticPretrainingMLP(nn.Module):
         embed_dim: int,
         hidden_dim: int,
         poly_rank: int = 16,
+        poly_degree: int = 3,
         dropout: float = 0.0
     ):
         super().__init__()
 
         # Import here to avoid circular imports
-        from dendritic.layers.DendriticLayer import DendriticLayer
+        from dendritic.layers.DendriticLayer import DendriticStack
 
-        self.fc1 = DendriticLayer(
+        self.fc1 = DendriticStack(
             embed_dim,
             hidden_dim,
             poly_rank=poly_rank,
+            poly_degree=poly_degree,
             init_scale=0.1
         )
         self.fc2 = nn.Linear(hidden_dim, embed_dim)

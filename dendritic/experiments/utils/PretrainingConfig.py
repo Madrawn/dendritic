@@ -67,7 +67,7 @@ class PretrainingConfig(AutoVivifyMixin):
     embed_dim: int = 384  # Smaller for faster experiments
     num_heads: int = 6
     num_layers: int = 6
-    max_seq_len: int = 256
+    max_seq_len: int = 2048
     dropout: float = 0.0
     layer_type: Literal["standard", "dendritic"] = "standard"
 
@@ -77,19 +77,19 @@ class PretrainingConfig(AutoVivifyMixin):
     dendritic_dropout: float = 0.0
 
     # Training
-    training_steps: int = 10000
-    batch_size: int = 32
+    training_steps: int = 30000
+    batch_size: int = 3
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
     warmup_steps: int = training_steps // 20
     max_grad_norm: float = 1.0
-    scheduler_type: str = "cosine"  # "cosine" or "plateau"
+    scheduler_type: str = "plateau"  # "cosine" or "plateau"
     eval_split_ratio: float = 0.1
 
     # ReduceOnPlateau specific parameters
-    plateau_patience: int = 2
+    plateau_patience: int = 4
     plateau_factor: float = 0.5
-    plateau_threshold: float = 1e-4
+    plateau_threshold: float = 5e-4
     plateau_cooldown: int = 0
     plateau_min_lr: float = 1e-6
     early_stop_multiplier: int = (
@@ -97,9 +97,9 @@ class PretrainingConfig(AutoVivifyMixin):
     )
 
     # Evaluation
-    eval_interval: int | None = None  # If None, set in __post_init__  
+    eval_interval: int | None = 50  # If None, set in __post_init__  
 
-    eval_batches: int = 100
+    eval_batches: int = 15
 
     # Experiment
     seeds: list[int] = field(default_factory=lambda: [42, 123, 456, 789, 1011])
@@ -109,7 +109,7 @@ class PretrainingConfig(AutoVivifyMixin):
 
     # Dataset configuration
     dataset: str = "openwebmath"
-    grouped_by_length: bool = True
+    grouped: bool = False
     group_separator: Literal['EOS_token', 'EOS_BOS_tokens'] | str = "EOS_token"
     dataset_kwargs: dict = field(default_factory=dict)
 
@@ -120,4 +120,4 @@ class PretrainingConfig(AutoVivifyMixin):
 
     def __post_init__(self):
         if self.eval_interval is None:
-            self.eval_interval = min(max(self.training_steps // 20, 1), 500)
+            self.eval_interval = max(self.training_steps // 20, 1)

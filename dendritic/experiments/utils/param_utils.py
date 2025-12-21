@@ -4,6 +4,7 @@
 from typing import Dict, Any, Tuple, Optional, List
 from dataclasses import dataclass
 
+from numpy import poly
 import torch.nn as nn
 
 from .PretrainingConfig import PretrainingConfig
@@ -259,7 +260,8 @@ def calculate_mlp_params_dendritic(
     embed_dim: int,
     hidden_dim: int,
     poly_rank: int,
-    diag_rank: Optional[int] = None
+    diag_rank: int | None = None,
+    poly_degree: int | None = None
 ) -> int:
     """Calculate DendriticMLP parameters."""
     if diag_rank is None:
@@ -267,8 +269,8 @@ def calculate_mlp_params_dendritic(
 
     # DendriticLayer (fc1)
     from .param_utils import count_dendritic_layer_params
-    dendritic_fc1 = count_dendritic_layer_params(
-        embed_dim, hidden_dim, poly_rank, diag_rank, bias=True
+    dendritic_fc1 = count_dendritic_stack_params(
+        embed_dim, hidden_dim, poly_rank, diag_rank, bias=True, poly_degree=poly_degree or 2
     )
 
     # Standard fc2
@@ -323,7 +325,7 @@ def calculate_non_mlp_params(config: PretrainingConfig) -> int:
     return total
 
 
-def find_matching_hidden_dims(config: PretrainingConfig) -> Tuple[int, int, int]:
+def find_matching_hidden_dims(config: PretrainingConfig) -> tuple[int, int]:
     """
     Find hidden dimensions that give equal total parameters for all three variants.
 
@@ -350,10 +352,8 @@ def find_matching_hidden_dims(config: PretrainingConfig) -> Tuple[int, int, int]
     diag_rank = max(4, poly_rank // 4)
 
     def dendritic_mlp_params(h: int) -> int:
-        return calculate_mlp_params_dendritic(embed_dim, h, poly_rank, diag_rank)
+        return calculate_mlp_params_dendritic(embed_dim, h, poly_rank, diag_rank, poly_degree=config.poly_degree)
 
-    def stack_mlp_params(h: int) -> int:
-        return calculate_mlp_params_dendritic_stack(embed_dim, h, poly_rank, diag_rank)
 
     # Search for dendritic hidden_dim
     lo, hi = embed_dim, 8 * embed_dim
@@ -376,25 +376,5 @@ def find_matching_hidden_dims(config: PretrainingConfig) -> Tuple[int, int, int]
                 best_diff = diff
                 best_dendritic = h
 
-    # Search for stack hidden_dim
-    lo, hi = embed_dim, 8 * embed_dim
-    while lo < hi:
-        mid = (lo + hi) // 2
-        params = stack_mlp_params(mid)
-        if params < target_per_layer:
-            lo = mid + 1
-        else:
-            hi = mid
-    stack_hidden = lo
-
-    # Fine-tune stack hidden_dim
-    best_stack = stack_hidden
-    best_diff = abs(stack_mlp_params(stack_hidden) - target_per_layer)
-    for h in [stack_hidden - 1, stack_hidden, stack_hidden + 1]:
-        if h > 0:
-            diff = abs(stack_mlp_params(h) - target_per_layer)
-            if diff < best_diff:
-                best_diff = diff
-                best_stack = h
-
-    return baseline_hidden, best_dendritic, best_stack
+    print(f"Baseline hidden_dim: {baseline_hidden}, Dendritic hidden_dim: {best_dendritic}")
+    return baseline_hidden, best_dendritic

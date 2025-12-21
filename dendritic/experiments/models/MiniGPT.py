@@ -1,3 +1,4 @@
+import dendritic
 from .BaselineMLP import BaselineMLP
 from .DendriticPretrainingMLP import DendriticPretrainingMLP
 from .DendriticStackPretrainingMLP import DendriticStackPretrainingMLP
@@ -8,7 +9,7 @@ import torch
 import torch.nn as nn
 
 
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 
 class MiniGPT(nn.Module):
@@ -17,6 +18,7 @@ class MiniGPT(nn.Module):
 
     Supports baseline, dendritic, and dendritic_stack MLP variants.
     """
+
     def __init__(
         self,
         vocab_size: int,
@@ -25,9 +27,12 @@ class MiniGPT(nn.Module):
         num_layers: int,
         max_seq_len: int,
         hidden_dim: int,
-        mlp_type: str = "baseline",  # "baseline", "dendritic", or "dendritic_stack"
+        mlp_type: Literal[
+            "standard", "dendritic"
+        ] = "standard",  # "standard", "dendritic", or "dendritic_stack"
         poly_rank: int = 16,
-        dropout: float = 0.0
+        poly_degree: int = 3,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -41,15 +46,15 @@ class MiniGPT(nn.Module):
         # Transformer blocks
         self.blocks = nn.ModuleList()
         for _ in range(num_layers):
-            if mlp_type == "baseline" or mlp_type == "baseline_wave":
+            if mlp_type == "standard":
                 mlp = BaselineMLP(embed_dim, hidden_dim, dropout)
             elif mlp_type == "dendritic":
                 mlp = DendriticPretrainingMLP(
-                    embed_dim, hidden_dim, poly_rank, dropout
-                )
-            elif mlp_type == "dendritic_stack":
-                mlp = DendriticStackPretrainingMLP(
-                    embed_dim, hidden_dim, poly_rank, dropout
+                    embed_dim=embed_dim,
+                    hidden_dim=hidden_dim,
+                    poly_rank=poly_rank,
+                    poly_degree=poly_degree,
+                    dropout=dropout,
                 )
             else:
                 raise ValueError(f"Unknown mlp_type: {mlp_type}")
@@ -68,7 +73,7 @@ class MiniGPT(nn.Module):
         # Create causal mask and register as buffer to ensure proper device placement
         self.register_buffer(
             "causal_mask",
-            torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool()
+            torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool(),
         )
 
         self._init_weights()
@@ -83,9 +88,7 @@ class MiniGPT(nn.Module):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(
-        self,
-        input_ids: torch.Tensor,
-        labels: Optional[torch.Tensor] = None
+        self, input_ids: torch.Tensor, labels: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         B, T = input_ids.shape
 
@@ -96,7 +99,7 @@ class MiniGPT(nn.Module):
         x = self.drop(tok_emb + pos_emb)
 
         # Causal mask for this sequence length
-        mask = self.causal_mask[:T, :T] # type: ignore DO NOT TOUCH!
+        mask = self.causal_mask[:T, :T]  # type: ignore DO NOT TOUCH!
 
         # Transformer blocks
         for block in self.blocks:
@@ -117,7 +120,7 @@ class MiniGPT(nn.Module):
             loss = nn.functional.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
-                ignore_index=-100
+                ignore_index=-100,
             )
             output["loss"] = loss
 

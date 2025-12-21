@@ -5,7 +5,7 @@ via Hugging Face datasets library.
 """
 
 from abc import ABC
-from typing import Any, Optional
+from typing import Any
 from datasets import (
     Dataset,
     IterableDataset,
@@ -17,6 +17,77 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.tokenization_utils_base import BatchEncoding
 
 from dendritic.dataset_handlers.BaseDatasetHandler import BaseDatasetHandler
+from functools import partial
+from torch.utils.data import DataLoader
+from datasets import IterableDataset, Dataset
+
+# --- 1. Define Helper Functions at Top Level ---
+# These must be picklable, so they cannot be nested inside the class method.
+
+
+def tokenize_no_pad_func(examples, tokenizer, text_column, separator_ids):
+    """Tokenize without padding, adding separators."""
+    texts = examples[text_column]
+    tokenized = tokenizer(texts, truncation=False, padding=False, return_tensors=None)
+    input_ids = tokenized["input_ids"]
+
+    if separator_ids:
+        # Optimizing: list comprehension is faster
+        input_ids = [seq + separator_ids for seq in input_ids]
+
+    return {"input_ids": input_ids}
+
+
+def tokenize_padded_func(examples, tokenizer, text_column, max_seq_len):
+    """Tokenize with padding and masking."""
+    texts = examples[text_column]
+    tokenized = tokenizer(
+        texts,
+        truncation=True,
+        max_length=max_seq_len,
+        padding="max_length",
+        return_tensors=None,
+    )
+    input_ids = tokenized["input_ids"]
+
+    # Handle implicit single-input wrapping
+    if isinstance(input_ids[0], int):
+        input_ids = [input_ids]
+
+    labels = [seq.copy() for seq in input_ids]
+
+    # Mask padding tokens in labels
+    pad_token_id = tokenizer.pad_token_id
+    if pad_token_id is not None:
+        for seq in labels:
+            for i, token in enumerate(seq):
+                if token == pad_token_id:
+                    seq[i] = -100
+
+    return {"input_ids": input_ids, "labels": labels}
+
+
+def group_texts_func(examples, max_seq_len):
+    """
+    Standard HF 'packing' logic.
+    Concatenates a batch of examples and splits them into fixed chunks.
+    """
+    # Concatenate all texts in the batch
+    concatenated = {k: sum(examples[k], []) for k in examples.keys()}
+    total_length = len(concatenated[list(examples.keys())[0]])
+
+    # Drop the remainder if it's smaller than max_seq_len
+    if total_length >= max_seq_len:
+        total_length = (total_length // max_seq_len) * max_seq_len
+
+    # Split by chunks of max_seq_len
+    result = {
+        k: [t[i : i + max_seq_len] for i in range(0, total_length, max_seq_len)]
+        for k in concatenated.keys()
+    }
+    # Create labels (same as inputs for causal LM)
+    result["labels"] = result["input_ids"].copy()
+    return result
 
 
 class TextCorpusHandler(BaseDatasetHandler, ABC):
@@ -86,7 +157,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
 
     def load_default_data(
         self,
-        max_samples: int,
+        max_samples: int = 10,
         split: str = "train",
         test_size: float = 0.1,
         seed: int = 42,
@@ -141,6 +212,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
 
         # 3. Convert IterableDataset to regular Dataset and limit to max_samples
         if isinstance(ds, IterableDataset):
+            return {"train": ds}
             # Streaming dataset: take the first max_samples and convert to list
             ds_head = ds.take(max_samples)
             samples = list(ds_head)
@@ -239,11 +311,8 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         return tokenized.data
 
     def prepare_pretraining_dataloaders(
-        self,
-        config: Any,  # PretrainingConfig
-        num_workers: Optional[int] = None,
-        **kwargs,
-    ) -> dict[str, Any]:
+        self, config: Any, num_workers: int = 0, kwargs=None
+    ):
         """
         Prepare data for pretraining with block concatenation (grouping).
 
@@ -267,145 +336,103 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         dict[str, Any]
             {'train': DataLoader, 'eval': DataLoader}
         """
-        from torch.utils.data import DataLoader
-        from datasets import Dataset
-        import hashlib
-        import torch
+        if kwargs is None:
+            kwargs = {}
 
-        # Calculate required blocks
+        # Calculate requirements
         train_blocks_needed = config.training_steps * config.batch_size
         test_blocks_needed = int(train_blocks_needed * config.eval_split_ratio)
 
-        # Estimate max_samples: assume each raw sample yields at least 1 block
-        # We'll load a bit more to account for short samples
-        safety_factor = 2
-        estimated_blocks_per_sample = 1  # conservative
-        max_samples = int(
-            (train_blocks_needed + test_blocks_needed)
-            * safety_factor
-            / estimated_blocks_per_sample
-        )
-
-        # Load raw data as streaming IterableDataset
+        # Load raw stream
         load_kwargs = kwargs.copy()
-        load_kwargs.setdefault("test_size", 0.0)  # We'll handle split ourselves
         load_kwargs.setdefault("streaming", True)
-        raw = self.load_default_data(max_samples=max_samples, **load_kwargs)
-        # raw["train"] is the entire dataset (since test_size=0)
-        raw_stream = raw["train"]
 
-        # Determine separator token IDs based on config
-        separator_token_ids = self._get_separator_token_ids(config.group_separator)
+        # Note: We remove the 'max_samples' restriction on the loader if possible,
+        # or keep it high enough. streaming=True lazily loads anyway.
+        raw = self.load_default_data(**load_kwargs)
+        raw_stream: IterableDataset = raw["train"]  # This is an IterableDataset
 
-        # Tokenization function (no padding, no truncation) with separator
-        def tokenize_no_pad(examples):
-            texts = examples[self.text_column]
-            tokenized = self.tokenizer(
-                texts,
-                truncation=False,
-                padding=False,
-                return_tensors=None,
+        # --- Pipeline Construction ---
+
+        if config.grouped:
+            separator_token_ids = self._get_separator_token_ids(config.group_separator)
+
+            # 1. Tokenize
+            # Use partial to pass 'self' arguments into the top-level function
+            tokenized_stream = raw_stream.map(
+                partial(
+                    tokenize_no_pad_func,
+                    tokenizer=self.tokenizer,
+                    text_column=self.text_column,
+                    separator_ids=separator_token_ids,
+                ),
+                batched=True,
+                remove_columns=raw_stream.column_names,
             )
-            input_ids = tokenized.data["input_ids"]
-            # Append separator tokens to each sequence
-            if separator_token_ids:
-                new_input_ids = []
-                for seq in input_ids:
-                    new_seq = seq + separator_token_ids
-                    new_input_ids.append(new_seq)
-                tokenized["input_ids"] = new_input_ids
-            return tokenized.data
 
-        # Apply tokenization in streaming fashion
-        tokenized_stream = raw_stream.map(
-            tokenize_no_pad,
-            batched=True,
-            remove_columns=raw_stream.column_names,
-        )
+            # 2. Group (Pack)
+            # This replaces your custom generator.
+            # batched=True allows access to multiple samples to pack them efficiently.
+            processed_stream = tokenized_stream.map(
+                partial(group_texts_func, max_seq_len=config.max_seq_len), batched=True
+            )
 
-        # Grouping function (same as before but yields blocks one by one)
-        def group_texts_generator(tokenized_iter, max_seq_len):
-            """Yield individual blocks from tokenized stream."""
-            buffer = []
-            buffer_len = 0
-            for example in tokenized_iter:
-                # example is a dict with 'input_ids' list
-                tokens = example["input_ids"]
-                buffer.extend(tokens)
-                buffer_len += len(tokens)
-                # While we have enough for at least one block
-                while buffer_len >= max_seq_len:
-                    block = buffer[:max_seq_len]
-                    buffer = buffer[max_seq_len:]
-                    buffer_len -= max_seq_len
-                    yield {"input_ids": block, "labels": block.copy()}
-            # Discard remainder (incomplete block)
+        else:
+            # Ungrouped pipeline
+            processed_stream = raw_stream.map(
+                partial(
+                    tokenize_padded_func,
+                    tokenizer=self.tokenizer,
+                    text_column=self.text_column,
+                    max_seq_len=config.max_seq_len,
+                ),
+                batched=True,
+                remove_columns=raw_stream.column_names,
+            )
 
-        # Deterministic split using seeded random for reproducible train/test split
-        import random
+        # --- Splitting Train / Test ---
 
-        rng = random.Random(42)
+        # Important: processed_stream is still an IterableDataset.
+        # It is picklable because we used top-level functions in .map()
 
-        def split_generator(block_iter, test_split_ratio):
-            for block in block_iter:
-                # Use random.random() which is deterministic with fixed seed
-                is_test = rng.random() < test_split_ratio
-                if is_test:
-                    yield "test", block
-                else:
-                    yield "train", block
+        # 1. Materialize Test Set
+        # We take the first N items. .take() returns an IterableDataset,
+        # so we iterate it to force loading into memory.
+        # print(f"Collecting {test_blocks_needed} validation blocks...")
+        # test_iter = iter(processed_stream.take(test_blocks_needed))
+        # test_blocks = list(tqdm(test_iter, total=test_blocks_needed))
 
-        # Collect blocks until we have enough
-        train_blocks = []
-        test_blocks = []
-        block_gen = group_texts_generator(iter(tokenized_stream), config.max_seq_len)
-        split_gen = split_generator(block_gen, config.eval_split_ratio)
+        # test_dataset = Dataset.from_dict(
+        #     {
+        #         "input_ids": [b["input_ids"] for b in test_blocks],
+        #         "labels": [b["labels"] for b in test_blocks],
+        #     }
+        # )
+        test_dataset = processed_stream.take(test_blocks_needed).with_format("torch")
 
-        for split, block in split_gen:
-            if split == "train" and len(train_blocks) < train_blocks_needed:
-                train_blocks.append(block)
-            elif split == "test" and len(test_blocks) < test_blocks_needed:
-                test_blocks.append(block)
+        # 2. Create Train Set using .skip()
+        # This creates a NEW IterableDataset that fast-forwards the underlying stream.
+        # This is safe for multiprocessing.
+        train_dataset = processed_stream.skip(test_blocks_needed)
+        train_dataset = train_dataset.with_format("torch")
 
-            if (
-                len(train_blocks) >= train_blocks_needed
-                and len(test_blocks) >= test_blocks_needed
-            ):
-                break
+        # --- DataLoaders ---
 
-        # Convert to Hugging Face Datasets
-        train_dataset = Dataset.from_dict(
-            {
-                "input_ids": [block["input_ids"] for block in train_blocks],
-                "labels": [block["labels"] for block in train_blocks],
-            }
-        )
-        test_dataset = Dataset.from_dict(
-            {
-                "input_ids": [block["input_ids"] for block in test_blocks],
-                "labels": [block["labels"] for block in test_blocks],
-            }
-        )
-        train_dataset.set_format("torch")
-        test_dataset.set_format("torch")
-
-        # Create DataLoaders
         train_dl = DataLoader(
             train_dataset,
             batch_size=config.batch_size,
-            shuffle=True,
-            num_workers=num_workers if num_workers is not None else 0,
+            num_workers=2,  # Now safe to use > 0
+            prefetch_factor=5,
             pin_memory=True,
-            persistent_workers=num_workers is not None and num_workers > 0,
             drop_last=True,
         )
+
         eval_dl = DataLoader(
             test_dataset,
             batch_size=config.batch_size,
-            shuffle=False,
-            num_workers=num_workers if num_workers is not None else 0,
+            num_workers=1,
+            prefetch_factor=config.eval_batches*2,
             pin_memory=True,
-            persistent_workers=False,
             drop_last=True,
         )
 
