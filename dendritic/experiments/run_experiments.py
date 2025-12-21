@@ -11,7 +11,6 @@ Usage:
 # Standard library imports
 import argparse
 import logging
-from math import exp
 import multiprocessing
 import os
 from datetime import datetime
@@ -32,12 +31,11 @@ from torch.utils.data import DataLoader
 from transformers.models.gpt2 import GPT2Tokenizer
 
 # Project‑specific imports
-from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
+from dendritic.experiments.utils.PretrainingConfig import CohortSchedulerConfig, PretrainingConfig
 from dendritic.experiments.utils.ExperimentResults import ExperimentResults
 from dendritic.experiments.utils.experiment_finetuning import (
     FinetuningConfig,
     FinetuningExperimentResults,
-    run_finetuning_experiment,
 )
 from dendritic.dataset_handlers.factory import get_handler
 
@@ -80,10 +78,7 @@ def run_pretraining_experiment(
     dict[str, ExperimentResults]
         Mapping from variant identifier to experiment results.
     """
-    from dendritic.experiments.utils.experiment_pretraining import (
-        PretrainingExperiment,
-        ModelVariant,
-    )
+
     from dendritic.experiments.utils.sweep import generate_scheduler_variants
 
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -103,7 +98,7 @@ def run_pretraining_experiment(
 
     for cfg in scheduler_variants_list:
         logger.info(f"Pretraining config: {cfg}")
-        variant_id = _variant_identifier(param_grid)
+        variant_id = _variant_identifier(cfg.param_grid)
         logger.info(f"Training variant: {variant_id}")
         wave_results = _train_config_with_models(
             cfg, ["baseline"], device, num_workers, tokenizer
@@ -150,16 +145,10 @@ def main() -> None:
         default="INFO",
         help="Logging level (default: INFO)",
     )
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=max(multiprocessing.cpu_count() // 2, 1),
-        help="Number of worker processes for data loading (default: half of CPU cores, at least 1)",
-    )
+
     parser.add_argument(
         "--dataset",
         type=str,
-        default="wikitext",
         help="Dataset identifier for pretraining (e.g., 'wikitext', 'openwebmath')",
     )
 
@@ -181,19 +170,17 @@ def main() -> None:
         logger.info("\n" + "=" * 70)
         logger.info("RUNNING PRETRAINING EXPERIMENT")
         logger.info("=" * 70)
-        param_grid = {"dropout": [0.1, 0.0]}  # Example: sweep over dropout values
+        param_grid = {"cohort_scheduler.min_mult": [None, 0.0], "layer_type": ["standard", "dendritic"]}  # Example: sweep over dropout values
         base_config = PretrainingConfig(
-            training_steps=6,
+            training_steps=60,
             batch_size=20,
             seeds=[24],  # Use fewer seeds for faster testing,
             scheduler_type="cosine",
             plateau_threshold=0.001,
-            dataset=args.dataset,
         )
         run_pretraining_experiment(
             device=args.device,
             base_config=base_config,
-            num_workers=args.num_workers,
             param_grid=param_grid,
         )
 
@@ -346,170 +333,6 @@ def debug_dataset_integrity(
     logger.debug("!" * 40 + "\n")
 
 
-def load_pretraining_data(
-    tokenizer: GPT2Tokenizer,
-    config: PretrainingConfig,
-    max_length: int = 256,
-    num_workers: int | None = None,
-) -> tuple[DataLoader, DataLoader]:
-    """Load and preprocess a text corpus dataset for pretraining.
-
-    Parameters
-    ----------
-    tokenizer : GPT2Tokenizer
-        Tokenizer to use for text tokenization.
-    config : PretrainingConfig
-        Configuration object containing training parameters and dataset selection.
-    max_length : int, optional
-        Maximum sequence length for tokenization. Defaults to 256.
-    num_workers : int | None, optional
-        Number of worker processes for dataset mapping. If ``None`` the value
-        defaults to half the CPU cores (minimum 1).
-
-    Returns
-    -------
-    tuple[DataLoader, DataLoader]
-        Training and evaluation DataLoaders.
-    """
-
-    from datasets import Dataset
-    import multiprocessing
-
-    # Compute required samples: steps * batch_size * epochs (safety margin +10%)
-    num_train_samples = (
-        int(config.training_steps * config.batch_size * 1 * 1.1) * 5
-    )  # compensate for packing
-    num_eval_samples = int(num_train_samples * 0.1)
-    total_raw_samples = num_train_samples + num_eval_samples
-
-    logger.info(
-        f"Loading {num_train_samples:,} train + {num_eval_samples:,} eval samples "
-        f"(target: {config.training_steps * config.batch_size:,} batches)"
-    )
-    logger.info(f"Dataset: {config.dataset}")
-
-    # Get appropriate dataset handler
-    handler = get_handler(config.dataset, tokenizer, max_length=max_length)
-    text_column = handler.text_column
-
-    # Load raw data with limited samples
-    raw = handler.load_default_data(
-        max_samples=total_raw_samples,
-        split='train',
-        test_size=num_eval_samples / total_raw_samples,
-        streaming=True,
-        seed=42,
-    )
-    train_raw = raw["train"]
-    eval_raw = raw["test"]
-
-    # Ensure they are Datasets (not IterableDataset) for filtering/selecting
-    if isinstance(train_raw, Dataset) and isinstance(eval_raw, Dataset):
-        # Filter empty lines (length > 10 characters)
-        train_filtered = train_raw.filter(lambda x: len(x[text_column]) > 10)
-        eval_filtered = eval_raw.filter(lambda x: len(x[text_column]) > 10)
-
-        # SAFE SELECTION: Take the minimum of (what we want, what we have)
-        actual_train_len = len(train_filtered)
-        if actual_train_len < num_train_samples:
-            logger.warning(
-                f"WARNING: Requested {num_train_samples} train samples, but only {actual_train_len} available."
-            )
-            logger.info("Training will run for fewer steps or cycle data.")
-
-        train_dataset = train_filtered.select(
-            range(min(num_train_samples, actual_train_len))
-        )
-        eval_dataset = eval_filtered.select(
-            range(min(num_eval_samples, len(eval_filtered)))
-        )
-    else:
-        # Streaming dataset: cannot filter or select; use as‑is
-        logger.warning("Streaming dataset detected; skipping filtering and selection.")
-        train_dataset = train_raw
-        eval_dataset = eval_raw
-
-    # Number of parallel processes for dataset mapping – will be overridden by CLI if provided
-    num_cores = (
-        num_workers
-        if num_workers is not None
-        else (multiprocessing.cpu_count() // 2 or 1)
-    )
-
-    # 1. Tokenize without padding first, using handler's pretraining tokenization
-    def tokenize_fn(examples):
-        # Use handler's tokenize_for_pretraining (appends newline by default)
-        return handler.tokenize_for_pretraining(examples, append_newline=True)
-
-    train_ds = train_dataset.map(
-        tokenize_fn,
-        batched=True,
-        remove_columns=train_dataset.column_names,
-        num_proc=num_cores if isinstance(train_dataset, Dataset) else None,
-    )
-    eval_ds = eval_dataset.map(
-        tokenize_fn,
-        batched=True,
-        remove_columns=eval_dataset.column_names,
-        num_proc=num_cores if isinstance(eval_dataset, Dataset) else None,
-    )
-
-    # 2. Group into blocks of max_length
-    def group_texts(examples):
-        # Concatenate all texts
-        concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
-
-        # We drop the small remainder at the end
-        total_length = (total_length // max_length) * max_length
-
-        # Split into chunks of max_length
-        result = {
-            k: [t[i : i + max_length] for i in range(0, total_length, max_length)]
-            for k, t in concatenated_examples.items()
-        }
-        # For causal LM, labels are a copy of input_ids
-        result["labels"] = result["input_ids"].copy()
-        return result
-
-    train_dataset = train_ds.map(
-        group_texts,
-        batched=True,
-        remove_columns=train_ds.column_names,
-        num_proc=num_cores if isinstance(train_ds, Dataset) else None,
-    )
-    eval_dataset = eval_ds.map(
-        group_texts,
-        batched=True,
-        remove_columns=eval_ds.column_names,
-        num_proc=num_cores if isinstance(eval_ds, Dataset) else None,
-    )
-
-    train_dataset.set_format("torch")
-    eval_dataset.set_format("torch")
-    # ========================== DEBUGGING BLOCK START ============================
-    if logger.isEnabledFor(logging.DEBUG):
-        debug_dataset_integrity(train_dataset, tokenizer, logger)
-    # ========================== DEBUGGING BLOCK END ============================
-
-    train_dataloader = DataLoader(
-        train_dataset,  # type: ignore
-        batch_size=config.batch_size,
-        shuffle=True,
-        num_workers=num_cores,
-        pin_memory=True,
-        persistent_workers=True,
-    )
-    eval_dataloader = DataLoader(
-        eval_dataset,  # type: ignore
-        batch_size=config.batch_size,
-        shuffle=False,
-        # num_workers=num_cores,  # evaluation dataloader does not need workers
-        # pin_memory=True,
-        # persistent_workers=True,
-    )
-
-    return train_dataloader, eval_dataloader
 
 # Helper to create a human‑readable identifier for a config variant
 def _variant_identifier(param_grid: dict[str, Any] | None) -> str:
@@ -634,13 +457,14 @@ def _train_config_with_models(
     )
 
     experiment = PretrainingExperiment(config=config)
-
-    train_dl, eval_dl = load_pretraining_data(
-        tokenizer,
-        config,
-        max_length=config.max_seq_len,
+    handler = get_handler(config.dataset, tokenizer)
+    dataloaders = handler.prepare_pretraining_dataloaders(
+        config=config,
         num_workers=num_workers,
     )
+    train_dl = dataloaders["train"]
+    eval_dl = dataloaders["eval"]
+
     baseline_hidden, dendritic_hidden, stack_hidden = find_matching_hidden_dims(
         experiment.config
     )
@@ -671,8 +495,10 @@ def _train_config_with_models(
             results = experiment.run(
                 train_dl, eval_dl, model_variants=model_variants, device=device
             )
+            torch._dynamo.reset()
     finally:
         # Ensure GPU memory is freed even on error
+        torch._dynamo.reset()
         torch.cuda.empty_cache()
     if results is None:
         raise RuntimeError("Pretraining experiment failed without returning results")

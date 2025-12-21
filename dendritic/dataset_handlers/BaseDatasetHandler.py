@@ -4,13 +4,18 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any
 
 
 class BaseDatasetHandler(ABC):
     """Abstract base class for dataset handlers."""
 
-    def __init__(self, tokenizer: PreTrainedTokenizer, max_length: int = 256, text_column: str = "text"):
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizer,
+        max_length: int = 256,
+        text_column: str = "text",
+    ):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.text_column = text_column
@@ -18,7 +23,7 @@ class BaseDatasetHandler(ABC):
         self.predefined_splits = None  # Should be set by subclasses
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def load_data(self, **kwargs) -> Dict[str, Any]:
+    def load_data(self, **kwargs) -> dict[str, Any]:
         """Load and return the dataset splits.
         If 'data_files' is provided, load from specified file(s).
         Otherwise, call the abstract method `load_default_data`.
@@ -30,7 +35,7 @@ class BaseDatasetHandler(ABC):
         else:
             return self.load_default_data(**kwargs)
 
-    def load_from_file(self, data_files, **kwargs) -> Dict[str, Any]:
+    def load_from_file(self, data_files, **kwargs) -> dict[str, Any]:
         """Load dataset from file(s)."""
         from datasets import load_dataset
         import os
@@ -57,35 +62,46 @@ class BaseDatasetHandler(ABC):
         }
 
     @abstractmethod
-    def load_default_data(self, **kwargs) -> Dict[str, Any]:
+    def load_default_data(self, *args, **kwargs) -> dict[str, Any]:
         """Load the default dataset when no data_files are provided."""
         pass
 
     @abstractmethod
-    def tokenize_function(self, examples: Dict[str, Any]) -> Dict[str, Any]:
+    def tokenize_function(self, examples: dict[str, Any]) -> dict[str, Any]:
         """Tokenize batch of examples with proper masking."""
         pass
 
-    def tokenize_for_pretraining(self, examples: Dict[str, Any], append_newline: bool = True) -> Dict[str, Any]:
+    def prepare_pretraining_dataloaders(
+        self, config: Any, num_workers: int | None = None
+    ) -> dict[str, Any]:
+        """Prepare dataloaders for pretraining."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement pretraining dataloader preparation. "
+            "Use a dataset handler that inherits from TextCorpusHandler."
+        )
+
+    def tokenize_for_pretraining(
+        self, examples: dict[str, Any], append_newline: bool = True
+    ) -> dict[str, Any]:
         """
         Tokenize a batch of text examples for pretraining (no padding, no truncation).
-        
+
         This is used before block concatenation. Optionally appends a newline token
         to separate documents/sentences.
-        
+
         The base implementation raises NotImplementedError; subclasses that support
         pretraining should override this method.
-        
+
         Parameters
         ----------
-        examples : Dict[str, Any]
+        examples : dict[str, Any]
             Batch with at least the key `self.text_column` containing a list of strings.
         append_newline : bool
             Whether to append a newline token to each text.
-            
+
         Returns
         -------
-        Dict[str, Any]
+        dict[str, Any]
             Tokenized batch with keys 'input_ids' (list of token IDs).
         """
         raise NotImplementedError(
@@ -93,7 +109,7 @@ class BaseDatasetHandler(ABC):
             "Use a dataset handler that inherits from TextCorpusHandler."
         )
 
-    def prepare_data(self, **kwargs) -> Dict[str, Any]:
+    def prepare_data(self, **kwargs) -> dict[str, Any]:
         """Load and prepare the dataset, including tokenization."""
         ds = self.load_data(**kwargs)
 
