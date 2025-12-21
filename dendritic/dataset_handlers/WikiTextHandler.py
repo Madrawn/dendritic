@@ -35,7 +35,7 @@ class WikiTextHandler(TextCorpusHandler):
     
     def load_default_data(
         self,
-        max_samples: int,
+        max_samples: int=1,
         split: str = "train",
         test_size: float = 0.1,
         seed: int = 42,
