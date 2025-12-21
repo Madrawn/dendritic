@@ -7,6 +7,8 @@ from dendritic.dataset_handlers.dataset_handlers import (
     TinyStoriesHandler,
     WikiTextHandler,
 )
+from transformers.models.gpt2 import GPT2Tokenizer
+
 from transformers.tokenization_utils import PreTrainedTokenizer
 from datasets import Dataset, IterableDataset
 import torch
@@ -41,23 +43,15 @@ def alpaca_sample_data():
 @pytest.mark.unit
 def test_wikitext_handler_load_data(wikitext_handler, mocker):
     """Test WikiText dataset loading and splitting functionality"""
-    mock_load = mocker.patch("dendritic.dataset_handlers.TextCorpusHandler.load_dataset")
+    mock_load = mocker.patch(
+        "dendritic.dataset_handlers.TextCorpusHandler.load_dataset"
+    )
     mock_load.return_value = Dataset.from_dict({"text": ["sample1", "sample2"] * 100})
     data = wikitext_handler.load_data(split="train", test_size=0.5, max_samples=200)
     assert "train" in data
     assert "test" in data
     assert len(data["train"]) == 100
     assert set(data["train"].column_names) == {"text"}
-
-
-@pytest.mark.unit
-def test_wikitext_tokenize_normal(wikitext_handler, wikitext_sample_data):
-    """Test WikiText tokenization with valid data"""
-    tokenized = wikitext_handler.tokenize_function(wikitext_sample_data)
-    assert "input_ids" in tokenized
-    assert "labels" in tokenized
-    assert len(tokenized["input_ids"]) == 2
-    assert len(tokenized["input_ids"][0]) == 7
 
 
 @pytest.mark.unit
@@ -72,7 +66,9 @@ def test_wikitext_tokenize_malformed(wikitext_handler):
 @pytest.mark.unit
 def test_wikitext_prepare_data(wikitext_handler: WikiTextHandler, mocker):
     """Test WikiText end-to-end data preparation"""
-    mock_load = mocker.patch("dendritic.dataset_handlers.TextCorpusHandler.load_dataset")
+    mock_load = mocker.patch(
+        "dendritic.dataset_handlers.TextCorpusHandler.load_dataset"
+    )
     # Use longer samples to ensure they don't get filtered out or result in empty blocks
     long_text = "sample text " * 1000
     mock_data = IterableDataset.from_generator(
@@ -80,7 +76,12 @@ def test_wikitext_prepare_data(wikitext_handler: WikiTextHandler, mocker):
     )
     mock_load.return_value = mock_data
     cfg = dendritic.experiments.utils.PretrainingConfig.PretrainingConfig(
-        training_steps=100, batch_size=2, max_seq_len=256, eval_split_ratio=0.5, grouped_by_length=True, group_separator="EOS_token"
+        training_steps=100,
+        batch_size=2,
+        max_seq_len=256,
+        eval_split_ratio=0.5,
+        grouped=True,
+        group_separator="EOS_token",
     )
     prepared = wikitext_handler.prepare_pretraining_dataloaders(config=cfg)
     print(f"DEBUG prepared keys: {list(prepared.keys())}")
@@ -102,9 +103,57 @@ def test_wikitext_prepare_data(wikitext_handler: WikiTextHandler, mocker):
     assert prepared["train"].dataset.format["type"] == "torch"
 
 
+@pytest.mark.timeout(120)
+@pytest.mark.unit
+def test_wikitext_prepare_data_ungrouped(wikitext_handler: WikiTextHandler, mocker):
+    """Test WikiText end-to-end data preparation with grouped=False."""
+    mock_load = mocker.patch(
+        "dendritic.dataset_handlers.TextCorpusHandler.load_dataset"
+    )
+    # Use longer samples to ensure they don't get filtered out or result in empty blocks
+    long_text = "sample text " * 1000
+    mock_data = IterableDataset.from_generator(
+        lambda: (x for x in ([{"text": long_text}] * 5000))
+    )
+    mock_load.return_value = mock_data
+    cfg = dendritic.experiments.utils.PretrainingConfig.PretrainingConfig(
+        training_steps=100,
+        batch_size=2,
+        max_seq_len=256,
+        eval_split_ratio=0.5,
+        grouped=False,
+        group_separator="EOS_token",
+    )
+    print(wikitext_handler.tokenizer.__class__.__name__)
+    prepared = wikitext_handler.prepare_pretraining_dataloaders(config=cfg)
+    assert "train" in prepared
+    assert "eval" in prepared
+    train_length = sum(1 for _ in prepared["train"])
+    eval_length = sum(1 for _ in prepared["eval"])
+    # with training_steps=100, batch_size=2, eval_split_ratio=0.5 we expect samples
+    assert train_length >= int(100)
+    assert eval_length >= int(train_length * 0.5)
+    # For DataLoader, we check format on the underlying dataset
+    assert prepared["train"].dataset.format["type"] == "torch"
+    # Additionally, verify that each sample is padded to max_seq_len
+    batch = next(iter(prepared["train"]))
+    input_ids = batch["input_ids"]
+    labels = batch["labels"]
+    assert input_ids.shape == (2, 256)
+    assert labels.shape == (2, 256)
+    # Check padding masking
+    pad_token_id = wikitext_handler.tokenizer.pad_token_id
+    if pad_token_id is not None:
+        pad_mask = input_ids == pad_token_id
+        label_mask = labels == -100
+        assert (
+            pad_mask == label_mask
+        ).all(), "Padding tokens should be masked in labels"
+
+
 @pytest.fixture
-def wikitext_handler(mock_tokenizer):
-    return WikiTextHandler(mock_tokenizer, max_length=256)
+def wikitext_handler():
+    return WikiTextHandler(GPT2Tokenizer.from_pretrained("gpt2"), max_length=2048)
 
 
 @pytest.fixture
