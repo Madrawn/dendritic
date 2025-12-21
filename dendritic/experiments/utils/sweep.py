@@ -6,6 +6,8 @@ import itertools
 from copy import deepcopy
 import dataclasses
 from typing import Union, get_origin, get_args, get_type_hints
+
+from pytest import param
 from .PretrainingConfig import PretrainingConfig, CohortSchedulerConfig
 
 
@@ -33,18 +35,24 @@ def generate_scheduler_variants(
 
     keys, values = zip(*param_grid.items())
     variants = []
-
+    params = {}
     for combo in itertools.product(*values):
         cfg = deepcopy(base_config)
         for key, val in zip(keys, combo):
+            if val is None:
+                continue
             assert isinstance(key, str)
             # set_nested_attr(cfg, key, val)
             cfg_field = key.split(".", 1)[0]
             sub_field = key.split(".", 1)[1] if "." in key else None
             if sub_field:
                 cfg.set_deep(cfg_field, sub_field, val)
+
             else:
                 setattr(cfg, cfg_field, val)
+            params[key] = val
+        
+        cfg.param_grid = deepcopy(params)
         variants.append(cfg)
 
     return variants

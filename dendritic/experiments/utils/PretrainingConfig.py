@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from click import group
+
 
 # Configuration for optional Cohort LR Scheduler
 @dataclass
@@ -17,7 +19,7 @@ class CohortSchedulerConfig:
     )
 
 
-from typing import get_type_hints
+from typing import Literal, get_type_hints
 
 
 class AutoVivifyMixin:
@@ -66,11 +68,13 @@ class PretrainingConfig(AutoVivifyMixin):
     num_heads: int = 6
     num_layers: int = 6
     max_seq_len: int = 256
-    dropout: float = 0.1
+    dropout: float = 0.0
+    layer_type: Literal["standard", "dendritic"] = "standard"
 
     # Dendritic-specific
     poly_rank: int = 16
-    dendritic_dropout: float = 0.1
+    poly_degree: int = 3
+    dendritic_dropout: float = 0.0
 
     # Training
     training_steps: int = 10000
@@ -104,13 +108,15 @@ class PretrainingConfig(AutoVivifyMixin):
     output_dir: str = "results/pretraining_comparison"
 
     # Dataset configuration
-    dataset: str = "wikitext"
+    dataset: str = "openwebmath"
+    grouped_by_length: bool = True
+    group_separator: Literal['EOS_token', 'EOS_BOS_tokens'] | str = "EOS_token"
     dataset_kwargs: dict = field(default_factory=dict)
 
-    # Computed fields (set in __post_init__)
     baseline_hidden_dim: int = 0
     dendritic_hidden_dim: int = 0
     dendritic_stack_hidden_dim: int = 0
+    param_grid: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.eval_interval is None:
