@@ -127,7 +127,7 @@ class PretrainingExperiment:
 
     # Remove duplicate _build_model (the class method is already defined)
 
-    def prefetching_cycle(self, dataloader, device):
+    def prefetching_cycle(self, dataloader: DataLoader, device: str):
         """
         Robust prefetching generator (Windows-Safe).
         Manages the iterator directly to avoid closure/pickle issues.
@@ -285,8 +285,8 @@ class PretrainingExperiment:
         model.train()
         # Initialize a placeholder before the loop
         queued_loss = None
-        avg_train_loss_tensor = torch.tensor(99.0, device='cpu')
-        avg_eval_loss = 99.0
+        avg_train_loss_tensor = torch.tensor(15.0, device='cpu')
+        avg_eval_loss = 15.0
         for step in progress:
             # Robust fetch (handles Windows iterator reset internally)
             input_ids, labels = next(train_iter)
@@ -373,7 +373,7 @@ class PretrainingExperiment:
                     rel_epsilon = 1.0 - scheduler.threshold
                     target = scheduler.best * rel_epsilon
                     logging.info(
-                        f"target:{target} threshold_mode:{scheduler.threshold_mode} threshold:{scheduler.threshold} is_better:{scheduler._is_better(eval_loss, scheduler.best)} bad_epochs{scheduler.num_bad_epochs}"
+                        f"target:{target:.4f} threshold_mode:{scheduler.threshold_mode} threshold:{scheduler.threshold} is_better:{scheduler._is_better(eval_loss, scheduler.best)} bad_epochs {scheduler.num_bad_epochs} no_improvement_count:{no_improvement_count}"
                     )
                     scheduler.step(avg_eval_loss)
 
@@ -389,7 +389,7 @@ class PretrainingExperiment:
 
                 logging.info(
                     f"{model_type} seed={seed} step={step+1}: "
-                    f"train={avg_train_loss:.4f}, eval={eval_loss:.4f}, ppl={perplexity:.2f}"
+                    f"train={avg_train_loss:.4f}, avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
                 )
 
                 if (
@@ -406,12 +406,16 @@ class PretrainingExperiment:
         # Final Eval
         model.eval()
         with torch.no_grad():
-            final_eval_loss = self.evaluate(model, eval_iter, None, device)
-
+            final_eval_loss = self.evaluate(model, eval_iter, self.config.eval_batches, device)
         from dendritic.enhancement import get_polynomial_stats
 
         polynomial_stats = get_polynomial_stats(model)
-
+        eval_iter.close()
+        train_iter.close()
+        del eval_iter, train_iter, eval_dataloader, train_dataloader, model, optimizer, scheduler
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
         return TrainingResult(
             model_type=model_type,
             seed=seed,
@@ -440,7 +444,7 @@ class PretrainingExperiment:
 
         with torch.no_grad():
             i = 0
-            for input_ids, labels in dataloader:
+            for input_ids, labels in tqdm(dataloader, total=max_batches, desc="Evaluating", leave=False):
                 if max_batches and i >= max_batches:
                     break
                 i += 1

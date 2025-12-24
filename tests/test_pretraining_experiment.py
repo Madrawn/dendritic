@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
 from dendritic.experiments.utils.experiment_pretraining import PretrainingExperiment
 
+
 # ----------------------------------------------------------------------
 # Minimal dummy dataset – returns random token IDs within vocab range
 # ----------------------------------------------------------------------
@@ -18,13 +19,10 @@ class DummyDataset(Dataset):
 
     def __getitem__(self, idx):
         # Random token IDs for inputs and labels
-        input_ids = torch.randint(
-            0, self.config.vocab_size, (self.config.max_seq_len,)
-        )
-        labels = torch.randint(
-            0, self.config.vocab_size, (self.config.max_seq_len,)
-        )
+        input_ids = torch.randint(0, self.config.vocab_size, (self.config.max_seq_len,))
+        labels = torch.randint(0, self.config.vocab_size, (self.config.max_seq_len,))
         return {"input_ids": input_ids, "labels": labels}
+
 
 # @pytest.mark.slow
 @pytest.mark.unit
@@ -33,10 +31,10 @@ def test_pretraining_experiment_end_to_end():
     # Configuration – keep everything tiny for a fast test
     # ------------------------------------------------------------------
     config = PretrainingConfig()
-    config.training_steps = 5          # Very short training loop
-    config.eval_interval = 1          # Evaluate every step
-    config.eval_batches = 1           # Only one batch for evaluation
-    config.seeds = [0]                # Single seed to keep runtime low
+    config.training_steps = 5  # Very short training loop
+    config.eval_interval = 1  # Evaluate every step
+    config.eval_batches = 1  # Only one batch for evaluation
+    config.seeds = [0]  # Single seed to keep runtime low
     config.batch_size = 1
 
     # ------------------------------------------------------------------
@@ -65,8 +63,11 @@ def test_pretraining_experiment_end_to_end():
     # ------------------------------------------------------------------
     experiment = PretrainingExperiment(config)
     # Create models and define variants (baseline and baseline_wave with AdamW)
-    baseline_model, dendritic_model, stack_model, baseline_wave_model = experiment.create_models()
+    baseline_model, baseline_wave_model = experiment._build_model(
+        "standard", dropout=0.0
+    ), experiment._build_model("standard", dropout=0.0)
     from dendritic.experiments.utils.experiment_pretraining import ModelVariant
+
     model_variants = [
         ModelVariant(
             name="baseline",
@@ -91,7 +92,9 @@ def test_pretraining_experiment_end_to_end():
             ),
         ),
     ]
-    results = experiment.run(train_loader, eval_loader, model_variants=model_variants, device="cpu")
+    results = experiment.run(
+        train_loader, eval_loader, model_variants=model_variants, device="cpu"
+    )
     # ------------------------------------------------------------------
     # Basic sanity checks on the returned ExperimentResults object
     # ------------------------------------------------------------------

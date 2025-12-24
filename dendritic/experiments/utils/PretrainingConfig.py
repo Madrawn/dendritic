@@ -67,7 +67,7 @@ class PretrainingConfig(AutoVivifyMixin):
     embed_dim: int = 384  # Smaller for faster experiments
     num_heads: int = 6
     num_layers: int = 6
-    max_seq_len: int = 2048
+    max_seq_len: int = 1024
     dropout: float = 0.0
     layer_type: Literal["standard", "dendritic"] = "standard"
 
@@ -77,8 +77,8 @@ class PretrainingConfig(AutoVivifyMixin):
     dendritic_dropout: float = 0.0
 
     # Training
-    training_steps: int = 30000
-    batch_size: int = 3
+    training_steps: int = 21000
+    batch_size: int = 6
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
     warmup_steps: int = training_steps // 20
@@ -89,7 +89,7 @@ class PretrainingConfig(AutoVivifyMixin):
     # ReduceOnPlateau specific parameters
     plateau_patience: int = 4
     plateau_factor: float = 0.5
-    plateau_threshold: float = 5e-4
+    plateau_threshold: float = 1e-3
     plateau_cooldown: int = 0
     plateau_min_lr: float = 1e-6
     early_stop_multiplier: int = (
@@ -97,7 +97,7 @@ class PretrainingConfig(AutoVivifyMixin):
     )
 
     # Evaluation
-    eval_interval: int | None = 50  # If None, set in __post_init__  
+    eval_interval: int | None = 30  # If None, set in __post_init__  
 
     eval_batches: int = 15
 

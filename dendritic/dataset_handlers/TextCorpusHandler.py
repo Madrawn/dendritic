@@ -5,6 +5,7 @@ via Hugging Face datasets library.
 """
 
 from abc import ABC
+from calendar import c
 from typing import Any
 from datasets import (
     Dataset,
@@ -13,6 +14,7 @@ from datasets import (
     IterableDatasetDict,
     load_dataset,
 )
+from tqdm import tqdm
 from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.tokenization_utils_base import BatchEncoding
 
@@ -341,7 +343,10 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
 
         # Calculate requirements
         train_blocks_needed = config.training_steps * config.batch_size
-        test_blocks_needed = int(train_blocks_needed * config.eval_split_ratio)
+        test_blocks_needed = min(
+            int(train_blocks_needed * config.eval_split_ratio),
+            config.batch_size * config.eval_batches,
+        )
 
         # Load raw stream
         load_kwargs = kwargs.copy()
@@ -398,22 +403,24 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         # 1. Materialize Test Set
         # We take the first N items. .take() returns an IterableDataset,
         # so we iterate it to force loading into memory.
-        # print(f"Collecting {test_blocks_needed} validation blocks...")
-        # test_iter = iter(processed_stream.take(test_blocks_needed))
-        # test_blocks = list(tqdm(test_iter, total=test_blocks_needed))
+        print(f"Collecting {test_blocks_needed} validation blocks...")
+        test_iter = iter(processed_stream.take(test_blocks_needed))
+        test_blocks = list(tqdm(test_iter, total=test_blocks_needed))
 
-        # test_dataset = Dataset.from_dict(
-        #     {
-        #         "input_ids": [b["input_ids"] for b in test_blocks],
-        #         "labels": [b["labels"] for b in test_blocks],
-        #     }
+        test_dataset = Dataset.from_dict(
+            {
+                "input_ids": [b["input_ids"] for b in test_blocks],
+                "labels": [b["labels"] for b in test_blocks],
+            }
+        ).with_format("torch")
+        # test_dataset = processed_stream.take(int(test_blocks_needed)).with_format(
+        # "torch"
         # )
-        test_dataset = processed_stream.take(test_blocks_needed).with_format("torch")
 
         # 2. Create Train Set using .skip()
         # This creates a NEW IterableDataset that fast-forwards the underlying stream.
         # This is safe for multiprocessing.
-        train_dataset = processed_stream.skip(test_blocks_needed)
+        train_dataset = processed_stream.skip(int(test_blocks_needed))
         train_dataset = train_dataset.with_format("torch")
 
         # --- DataLoaders ---
@@ -422,8 +429,9 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
             train_dataset,
             batch_size=config.batch_size,
             num_workers=2,  # Now safe to use > 0
-            prefetch_factor=5,
+            prefetch_factor=2,
             pin_memory=True,
+            persistent_workers=True,
             drop_last=True,
         )
 
@@ -431,8 +439,8 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
             test_dataset,
             batch_size=config.batch_size,
             num_workers=1,
-            prefetch_factor=config.eval_batches*2,
             pin_memory=True,
+            persistent_workers=True,
             drop_last=True,
         )
 
