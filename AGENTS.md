@@ -1,57 +1,134 @@
-# AGENTS.md
+# CLAUDE.md
 
-This file provides guidance to agents when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Build/Test Commands
+## Project Overview
 
+**Dendritic** is a Python machine learning research project implementing dendritic neural network layers for polynomial feature enhancement. The core innovation is adding learnable polynomial (quadratic) features to linear transformations via asymmetric formulation `W₁x ⊙ W₂x`, which optimizes better than symmetric `(Px)²`.
+
+## Development Commands
+
+### Testing
 - **Run all tests**: `python run_tests.py` (custom test runner with mode selection)
 - **Run specific test types**: `python run_tests.py --mode unit|integration|edge|all`
 - **Run tests in parallel**: `python run_tests.py --parallel`
 - **Run with coverage**: `python run_tests.py --coverage`
 - **Run specific test by keyword**: `python run_tests.py -k "test_forward_pass"`
 
-## Project-Specific Patterns
+### Coverage Requirements
+- Minimum 80% coverage threshold (configured in `.coveragerc`)
+- Coverage reports generated to `htmlcov/` directory
+- Branch coverage enabled
 
-- **Test markers**: Tests use pytest markers (`@pytest.mark.unit`, `@pytest.mark.integration`, `@pytest.mark.edge`) - must match conftest.py registration
-- **CUDA requirement**: Tests assume CUDA is available (`assert torch.cuda.is_available()` in run_tests.py:6)
-- **Experiment structure**: Results use specific model keys ("baseline", "dendritic", "stack", "baseline_wave") with statistical comparisons between them
-- **Polynomial rank**: Default poly_rank="auto" computes as `max(4, input_dim // 64)` in enhancement logic
-- **Dataset handling**: Text corpora (WikiText, OpenWebMath, etc.) use `TextCorpusHandler` with mandatory `max_samples` (no default), default `streaming=True`, and in‑memory splitting via `Dataset.train_test_split`. The evaluation split ratio can be configured via the `test_size` parameter (default 0.1). `PythonAlpacaHandler` provides prompt formatting for instruction datasets.
+### Dependencies
+- Install: `pip install -e .` (editable install from `pyproject.toml`)
+- Core dependencies: `torch`, `transformers`, `datasets`, `tqdm`
+- Python: `>=3.7`
 
-## Critical Gotchas
+## Architecture
 
-- **Memory management**: Integration tests include explicit garbage collection (`gc.collect()`) due to large model memory requirements
-- **Device placement**: Tests verify CUDA/CPU consistency with detailed debugging output when GPU available
-- **Serialization**: Numpy types must be converted to native Python types for JSON serialization in experiment results
-- **Test data**: Some edge case tests are marked `@pytest.mark.xfail` due to known limitations
+### Core Components
+1. **Dendritic Layers** (`dendritic/layers/`): Custom neural network layers implementing polynomial feature enhancement
+   - `DendriticLayer`: Core asymmetric formulation `W₁x ⊙ W₂x`
+   - `DendriticMLP`: MLP with dendritic layers
+   - `DendriticStack`: Stacked dendritic layers
+   - `InstabilityGatedAttention`: Experimental attention mechanism
 
-## File Organization
+2. **Enhancement System** (`dendritic/enhancement.py`): Converts standard `nn.Linear` layers to dendritic layers
+   - `enhance_model_with_dendritic()`: Main enhancement function
+   - Polynomial rank: `poly_rank="auto"` computes as `max(4, input_dim // 64)`
 
-- **Experiments**: All experiment code in `dendritic/experiments/` with specific run patterns
-- **Layers**: Custom dendritic layers in `dendritic/layers/` with mathematical correctness verification
-- **Handlers**: Dataset handlers in `dendritic/dataset_handlers/` with specific interface requirements
+3. **Experiment Framework** (`dendritic/experiments/`): Two-phase experiments (pretraining + finetuning)
+   - `run_experiments.py`: Main experiment runner
+   - Config-driven with dataclass-based configs (`PretrainingConfig`, `FinetuningConfig`)
+   - Multi-seed experiments (default 5 seeds) for statistical significance
 
-## Adding New Datasets
+4. **Dataset Handlers** (`dendritic/dataset_handlers/`): Factory pattern for dataset loading
+   - `BaseDatasetHandler`: Abstract base class
+   - `TextCorpusHandler`: For text datasets (WikiText, OpenWebMath, etc.)
+   - `PythonAlpacaHandler`: For instruction datasets with prompt formatting
+   - Mandatory `max_samples` parameter (no unbounded downloads)
+   - Default `streaming=True` for large datasets
 
-To add a new text corpus dataset:
+### Key Architectural Patterns
 
-1. Create a handler class inheriting from `TextCorpusHandler`.
-2. Set class attributes `dataset_name` and `text_column`.
-3. Optionally override `load_default_data` if the dataset requires special configuration (e.g., sub‑dataset name).
-4. The handler will be automatically registered via the factory (requires `@register_handler` decorator or manual registration in `factory.py`).
+#### Model Variants
+The system supports four model variants that must be compared statistically:
+- **baseline**: Standard transformer with `nn.Linear` layers
+- **dendritic**: Transformer with dendritic-enhanced MLP blocks
+- **stack**: Transformer with stacked dendritic layers
+- **baseline_wave**: Baseline with sinusoidal activations
 
-Example for a new dataset "my_corpus":
+#### Experiment Flow
+1. **Pretraining**: Language modeling on text corpora
+2. **Finetuning**: Instruction tuning on formatted datasets
+3. **Analysis**: Statistical comparison between model variants
+4. **Visualization**: Built-in result visualization utilities
 
-```python
-from dendritic.dataset_handlers.TextCorpusHandler import TextCorpusHandler
-from dendritic.dataset_handlers.factory import register_handler
-
-@register_handler("my_corpus")
-class MyCorpusHandler(TextCorpusHandler):
-    dataset_name = "username/my_corpus"
-    text_column = "text"
+#### Data Flow
+```
+Dataset Handler → Preprocessing → Model (baseline/dendritic/stack) → Results → Analysis
 ```
 
-The `load_default_data` method returns a dictionary with keys 'train' and 'test' (regular Datasets). The evaluation split ratio can be controlled via the `test_size` parameter; set `test_size=0.0` to skip evaluation split.
+## Critical Implementation Details
 
-The handler can then be used in experiments via `--dataset my_corpus`. The mandatory `max_samples` parameter ensures controlled downloads, and streaming is enabled by default.
+### CUDA Requirement
+- **All tests assume CUDA availability**: `assert torch.cuda.is_available()` in `run_tests.py:6`
+- **Device placement**: Tests verify CUDA/CPU consistency with detailed debugging output
+- **Memory management**: Integration tests include explicit `gc.collect()` due to large model memory requirements
+
+### Test Organization
+- **Strict marker system**: All tests must use `@pytest.mark.unit|integration|edge`
+- **Marker enforcement**: Configured in `tests/conftest.py`
+- **Parallel execution**: Supported via `--parallel` flag
+- **Timeout**: 45-second timeout per test (configured in `pyproject.toml`)
+
+### Serialization Requirements
+- **Numpy to Python**: Must convert numpy types to native Python types for JSON serialization
+- **Result storage**: JSON format with comprehensive metadata
+- **Model checkpoints**: `.pth` and `.pt` files
+
+### Dataset Handling Constraints
+- **Mandatory limits**: `max_samples` required for all dataset loads (no default)
+- **In-memory splitting**: All datasets split via `Dataset.train_test_split`
+- **Evaluation split**: Default `test_size=0.1`, can be configured via handler parameter
+- **Factory registration**: New datasets registered via `@register_handler` decorator
+
+## Adding New Components
+
+### New Dataset Handler
+1. Create handler class inheriting from `TextCorpusHandler` or `BaseDatasetHandler`
+2. Set class attributes `dataset_name` and `text_column`
+3. Optionally override `load_default_data` for special configuration
+4. Register with `@register_handler("dataset_name")` decorator
+5. Handler will be available via `--dataset dataset_name` in experiments
+
+### New Model Variant
+1. Implement model following existing patterns in `dendritic/experiments/models/`
+2. Ensure parameter matching with baseline model
+3. Add to model comparison logic in experiment analysis
+4. Include comprehensive tests covering forward/backward passes
+
+### New Dendritic Layer
+1. Implement in `dendritic/layers/` following existing layer patterns
+2. Include mathematical correctness verification
+3. Add unit tests for forward/backward passes
+4. Update `layer.py` imports and documentation
+
+## Common Pitfalls
+
+1. **Memory leaks**: Always include explicit `gc.collect()` in integration tests
+2. **Serialization errors**: Convert numpy types before JSON serialization
+3. **Test marker violations**: All tests must have proper pytest markers
+4. **Dataset limits**: Never load datasets without `max_samples` parameter
+5. **CUDA assumptions**: Tests will fail without GPU availability
+6. **Polynomial rank**: Understand `poly_rank="auto"` computes as `max(4, input_dim // 64)`
+
+## Reference Files
+
+- **Build/Test**: `pyproject.toml`, `run_tests.py`, `.coveragerc`
+- **Core Logic**: `dendritic/enhancement.py`, `dendritic/layers/layer.py`
+- **Experiments**: `dendritic/experiments/run_experiments.py`
+- **Configuration**: `dendritic/experiments/utils/PretrainingConfig.py`
+- **Testing**: `tests/conftest.py`, `tests/README.md`
+- **Agent Guidance**: `AGENTS.md`, `.roo/rules-code/AGENTS.md`, `.roo/rules-architect/AGENTS.md`
