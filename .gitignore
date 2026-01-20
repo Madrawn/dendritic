@@ -8,3 +8,4 @@ data_cache/
 *.log
 test_model_state.json
 test_model_state.pt
+.claude
