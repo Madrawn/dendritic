@@ -1,4 +1,3 @@
-import dendritic
 from .BaselineMLP import BaselineMLP
 from .DendriticPretrainingMLP import DendriticPretrainingMLP
 from .DendriticStackPretrainingMLP import DendriticStackPretrainingMLP

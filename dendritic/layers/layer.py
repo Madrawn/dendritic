@@ -110,9 +110,10 @@ def diagnostic_benchmark():
     # Smaller dimensions to make rank limits matter
     input_dim = 64
     output_dim = 1
-    n_samples = 500
-    n_epochs = 500
-
+    n_samples = 50000
+    n_epochs = 5
+    # Fixed poly_rank for this test
+    test_poly_rank = 8
     def make_rank_k_target(X, k, seed=42):
         """k independent pairwise products."""
         torch.manual_seed(seed)
@@ -143,7 +144,7 @@ def diagnostic_benchmark():
     evaluate_rank_scaling(input_dim, output_dim, n_epochs, make_rank_k_target, X)
 
     # Test 2: Diagonal vs Cross structure
-    test_poly_rank = test_structure_responsiveness(input_dim, output_dim, n_epochs, X)
+    test_structure_responsiveness(input_dim, output_dim, n_epochs, test_poly_rank, X)
 
     # Test 3: Cubic necessity
     assess_cubic_feature_contributions(
@@ -158,7 +159,6 @@ def diagnostic_benchmark():
         n_epochs,
         X,
         make_rank_k_target,
-        test_poly_rank,
     )
 
 
@@ -211,13 +211,12 @@ def evaluate_rank_scaling(input_dim, output_dim, n_epochs, make_rank_k_target, X
         print()
 
 
-def test_structure_responsiveness(input_dim, output_dim, n_epochs, X):
+def test_structure_responsiveness(input_dim, output_dim, n_epochs, test_poly_rank, X):
     print("\n" + "-" * 90)
     print("TEST 2: Structure Sensitivity (diagonal x_i² vs cross x_i*x_j)")
     print("-" * 90)
 
-    # Fixed poly_rank for this test
-    test_poly_rank = 8
+
 
     targets_struct = {
         "10×(x_i²)": (X[:, :10] ** 2).sum(dim=1, keepdim=True),
@@ -352,7 +351,7 @@ def assess_cubic_feature_contributions(
 
 
 def evaluate_model_generalization(
-    input_dim, output_dim, n_samples, n_epochs, X, make_rank_k_target, test_poly_rank
+    input_dim, output_dim, n_samples, n_epochs, X, make_rank_k_target
 ):
     print("\n" + "-" * 90)
     print("TEST 4: Generalization (train on 80%, test on 20%)")
@@ -362,7 +361,7 @@ def evaluate_model_generalization(
     X_train, X_test = X[:n_train], X[n_train:]
 
     # Medium-complexity target
-    y_full = make_rank_k_target(X, k=8, seed=123)
+    y_full = make_rank_k_target(X, k=16, seed=123)
     y_train, y_test = y_full[:n_train], y_full[n_train:]
 
     models_gen = {
@@ -379,14 +378,17 @@ def evaluate_model_generalization(
         "DendriticLayer r=2": lambda: DendriticLayer(
             input_dim, output_dim, poly_rank=2
         ),
-        f"DendriticStack r={test_poly_rank}": lambda: DendriticStack(
-            input_dim, output_dim, poly_rank=test_poly_rank
+        f"DendriticStack r=8": lambda: DendriticStack(
+            input_dim, output_dim, poly_rank=8
         ),
-        f"DendriticStack r={test_poly_rank//2}": lambda: DendriticStack(
-            input_dim, output_dim, poly_rank=test_poly_rank // 2
+        f"DendriticStack r=6": lambda: DendriticStack(
+            input_dim, output_dim, poly_rank=6
         ),
-        f"DendriticStack r={test_poly_rank//4}": lambda: DendriticStack(
-            input_dim, output_dim, poly_rank=test_poly_rank // 4
+        f"DendriticStack r=4": lambda: DendriticStack(
+            input_dim, output_dim, poly_rank=4
+        ),
+        f"DendriticStack r=2": lambda: DendriticStack(
+            input_dim, output_dim, poly_rank=2
         ),
     }
 
@@ -467,7 +469,6 @@ def check_true_capacity():
 
 
 def performance_test():
-    """Test all implementations for correctness and expressiveness."""
     import time
 
     torch.manual_seed(42)
@@ -492,19 +493,10 @@ def performance_test():
         "Linear (baseline)": nn.Linear(input_dim, output_dim),
         "Dendritic (rank=8)": DendriticLayer(input_dim, output_dim, poly_rank=8),
         "Dendritic (rank=16)": DendriticLayer(input_dim, output_dim, poly_rank=16),
-        "DendriticV2 (rank=8)": DendriticLayer(input_dim, output_dim, poly_rank=8),
-        "DendriticV2 (rank=16)": DendriticLayer(input_dim, output_dim, poly_rank=16),
         "DendriticStack (rank=8)": DendriticStack(input_dim, output_dim, poly_rank=8),
         "DendriticStack (rank=16)": DendriticStack(input_dim, output_dim, poly_rank=16),
     }
 
-    # Add two-layer versions for fair comparison
-    def make_two_layer(cls, **kwargs):
-        return nn.Sequential(
-            cls(input_dim, output_dim, **kwargs),
-            nn.GELU(),
-            cls(output_dim, output_dim, **kwargs),
-        )
 
     # Warmup
     print("\nWarming up...")
