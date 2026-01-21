@@ -91,7 +91,6 @@ class DendriticLayer(DendriticStack):
             poly_degree=2,
             independent_inputs=independent_inputs,
             diag_rank=diag_rank,
-            init_scale=init_scale,
             bias=bias,
         )
         # Alias for compatibility
