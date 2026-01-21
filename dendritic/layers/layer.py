@@ -91,4 +91,4 @@ if __name__ == "__main__":
     _test()
     check_true_capacity()
     performance_test()
-    diagnostic_benchmark(n_batches=7500, batch_size=16)
+    diagnostic_benchmark(n_batches=2500, batch_size=100)
