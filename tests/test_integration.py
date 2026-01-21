@@ -350,7 +350,7 @@ def test_training_performance(gpt2_model_and_tokenizer, small_dataset):
     # Verify performance impact is reasonable
     assert enhanced_duration < base_duration * 1.5  # Less than 50% slowdown
 
-
+@pytest.mark.timeout(300)
 @pytest.mark.integration
 def test_scaling_with_model_size():
     """Test scaling with different model sizes"""

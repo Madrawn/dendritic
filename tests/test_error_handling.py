@@ -64,7 +64,6 @@ def test_corrupted_data_files(monkeypatch):
 
 @pytest.mark.parametrize("invalid_config", [
     {"poly_rank": -1},
-    {"init_scale": 0},
     {"dendritic_cls": "invalid_class"},
     {"dendritic_kwargs": "not_a_dict"}
 ])

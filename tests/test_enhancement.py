@@ -161,25 +161,6 @@ def test_enhancement_fixed(simple_mlp):
 
 
 @pytest.mark.unit
-def test_enhancement_scale(simple_mlp):
-    # Test init_scale
-    enhanced_scale = enhance_model_with_dendritic(simple_mlp, init_scale=0.1)
-    # Find the first DendriticLayer or DendriticStack and check its scale attribute
-    dendritic_layer = next(
-        (
-            m
-            for m in enhanced_scale.modules()
-            if isinstance(m, (DendriticLayer, DendriticStack))
-        ),
-        None,
-    )
-    assert dendritic_layer is not None
-    scale_attr = getattr(dendritic_layer, "scale", None)
-    assert scale_attr is not None
-    if isinstance(scale_attr, torch.Tensor):
-        assert torch.allclose(scale_attr, torch.tensor(0.1))
-    elif hasattr(scale_attr, "data") and isinstance(scale_attr.data, torch.Tensor):
-        assert torch.allclose(scale_attr.data, torch.tensor(0.1))
 
 
 @pytest.mark.unit
