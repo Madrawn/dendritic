@@ -74,21 +74,32 @@ def group_texts_func(examples, max_seq_len):
     Standard HF 'packing' logic.
     Concatenates a batch of examples and splits them into fixed chunks.
     """
-    # Concatenate all texts in the batch
-    concatenated = {k: sum(examples[k], []) for k in examples.keys()}
-    total_length = len(concatenated[list(examples.keys())[0]])
+    # Only concatenate columns that are lists of lists (token IDs)
+    # This prevents errors if 'text' or other metadata columns are still present
+    concatenated = {
+        k: sum(examples[k], [])
+        for k in examples.keys()
+        if isinstance(examples[k][0], list)
+    }
 
-    # Drop the remainder if it's smaller than max_seq_len
+    # Total length of the concatenated sequences
+    total_length = len(next(iter(concatenated.values())))
+
+    # We drop the small remainder
     if total_length >= max_seq_len:
         total_length = (total_length // max_seq_len) * max_seq_len
 
-    # Split by chunks of max_seq_len
+    # Split into chunks of max_seq_len
     result = {
         k: [t[i : i + max_seq_len] for i in range(0, total_length, max_seq_len)]
-        for k in concatenated.keys()
+        for k, t in concatenated.items()
     }
-    # Create labels (same as inputs for causal LM)
-    result["labels"] = result["input_ids"].copy()
+
+    # Standard LLM pretraining usually predicts the next token,
+    # so we often create labels here if they don't exist
+    if "input_ids" in result:
+        result["labels"] = result["input_ids"].copy()
+
     return result
 
 
@@ -214,7 +225,6 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
 
         # 3. Convert IterableDataset to regular Dataset and limit to max_samples
         if isinstance(ds, IterableDataset):
-            return {"train": ds}
             # Streaming dataset: take the first max_samples and convert to list
             ds_head = ds.take(max_samples)
             samples = list(ds_head)
@@ -430,8 +440,8 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
             batch_size=config.batch_size,
             num_workers=2,  # Now safe to use > 0
             prefetch_factor=2,
-            pin_memory=True,
-            persistent_workers=True,
+            pin_memory=False,
+            persistent_workers=False,
             drop_last=True,
         )
 
@@ -439,8 +449,8 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
             test_dataset,
             batch_size=config.batch_size,
             num_workers=1,
-            pin_memory=True,
-            persistent_workers=True,
+            pin_memory=False,
+            persistent_workers=False,
             drop_last=True,
         )
 

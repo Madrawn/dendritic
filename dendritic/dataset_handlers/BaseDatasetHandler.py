@@ -72,7 +72,7 @@ class BaseDatasetHandler(ABC):
         pass
 
     def prepare_pretraining_dataloaders(
-        self, config: Any, num_workers: int = 0
+        self, config: Any, num_workers: int = 0, *args, **kwargs
     ) -> dict[str, Any]:
         """Prepare dataloaders for pretraining."""
         raise NotImplementedError(

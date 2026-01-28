@@ -1,16 +1,16 @@
-from typing import Optional
 import torch
 import torch.nn as nn
 
 
 class TransformerBlock(nn.Module):
     """Single transformer block with configurable MLP."""
+
     def __init__(
         self,
         embed_dim: int,
         num_heads: int,
         mlp_module: nn.Module,
-        dropout: float = 0.0
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.ln1 = nn.LayerNorm(embed_dim)
@@ -22,9 +22,7 @@ class TransformerBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(
-        self,
-        x: torch.Tensor,
-        attn_mask: Optional[torch.Tensor] = None
+        self, x: torch.Tensor, attn_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
         # Self-attention with residual
         x_norm = self.ln1(x)
