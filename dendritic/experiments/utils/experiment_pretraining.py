@@ -26,6 +26,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 from transformers import GPT2LMHeadModel
+from transformers.models.gpt2 import GPT2Tokenizer
 
 from dendritic.experiments.analysis.analysis import (
     analyze_results,
@@ -33,6 +34,7 @@ from dendritic.experiments.analysis.analysis import (
 from dendritic.experiments.models.MiniGPT import MiniGPT
 
 from .PretrainingConfig import PretrainingConfig, CohortSchedulerConfig
+from .experiment_utils import set_random_seed
 
 from torch.utils.data import DataLoader
 import numpy as np
@@ -285,7 +287,7 @@ class PretrainingExperiment:
         model.train()
         # Initialize a placeholder before the loop
         queued_loss = None
-        avg_train_loss_tensor = torch.tensor(15.0, device='cpu')
+        avg_train_loss_tensor = torch.tensor(15.0, device="cpu")
         avg_eval_loss = 15.0
         for step in progress:
             # Robust fetch (handles Windows iterator reset internally)
@@ -406,14 +408,25 @@ class PretrainingExperiment:
         # Final Eval
         model.eval()
         with torch.no_grad():
-            final_eval_loss = self.evaluate(model, eval_iter, self.config.eval_batches, device)
+            final_eval_loss = self.evaluate(
+                model, eval_iter, self.config.eval_batches, device
+            )
         from dendritic.enhancement import get_polynomial_stats
 
         polynomial_stats = get_polynomial_stats(model)
         eval_iter.close()
         train_iter.close()
-        del eval_iter, train_iter, eval_dataloader, train_dataloader, model, optimizer, scheduler
+        del (
+            eval_iter,
+            train_iter,
+            eval_dataloader,
+            train_dataloader,
+            model,
+            optimizer,
+            scheduler,
+        )
         import gc
+
         gc.collect()
         torch.cuda.empty_cache()
         return TrainingResult(
@@ -444,7 +457,9 @@ class PretrainingExperiment:
 
         with torch.no_grad():
             i = 0
-            for input_ids, labels in tqdm(dataloader, total=max_batches, desc="Evaluating", leave=False):
+            for input_ids, labels in tqdm(
+                dataloader, total=max_batches, desc="Evaluating", leave=False
+            ):
                 if max_batches and i >= max_batches:
                     break
                 i += 1
@@ -514,3 +529,53 @@ class PretrainingExperiment:
         # print_experiment_summary(results)
 
         return results
+
+
+def train_config_with_models(
+    config: PretrainingConfig,
+    device: str,
+    num_workers: int | None,
+    tokenizer: GPT2Tokenizer,
+) -> ExperimentResults:
+    """Train specified models under a single configuration."""
+    from dendritic.dataset_handlers.factory import get_handler
+
+    experiment = PretrainingExperiment(config=config)
+    handler = get_handler(config.dataset, tokenizer)
+    dataloaders = handler.prepare_pretraining_dataloaders(
+        config=config,
+        num_workers=num_workers if num_workers is not None else 0,
+    )
+    train_dl = dataloaders["train"]
+    eval_dl = dataloaders["eval"]
+
+    model = experiment._build_model(mlp_type=experiment.config.layer_type, dropout=experiment.config.dropout)  # type: ignore
+    model_variant = ModelVariant(
+        name=config.layer_type,
+        model=model,
+        results=[],
+        optimizer=torch.optim.AdamW(
+            model.parameters(),
+            lr=experiment.config.learning_rate,  # type: ignore
+            weight_decay=experiment.config.weight_decay,  # type: ignore
+            betas=(0.9, 0.95),
+            fused=True,
+        ),
+    )
+
+    try:
+        # Ensure deterministic behavior for each seed
+        results: ExperimentResults | None = None
+        for seed in experiment.config.seeds:
+            set_random_seed(seed)
+            results = experiment.run(
+                train_dl, eval_dl, model_variants=[model_variant], device=device
+            )
+            torch._dynamo.reset()
+    finally:
+        # Ensure GPU memory is freed even on error
+        torch._dynamo.reset()
+        torch.cuda.empty_cache()
+    if results is None:
+        raise RuntimeError("Pretraining experiment failed without returning results")
+    return results
