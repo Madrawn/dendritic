@@ -38,10 +38,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - `enhance_model_with_dendritic()`: Main enhancement function
    - Polynomial rank: `poly_rank="auto"` computes as `max(4, input_dim // 64)`
 
-3. **Experiment Framework** (`dendritic/experiments/`): Two-phase experiments (pretraining + finetuning)
-   - `run_experiments.py`: Main experiment runner
-   - Config-driven with dataclass-based configs (`PretrainingConfig`, `FinetuningConfig`)
+3. **Experiment Framework** (`dendritic/experiments/`): Two-phase experiments (pretraining + finetuning) plus specialized experiments
+   - `run_experiments.py`: Main experiment runner supporting pretraining, finetuning, and confidence experiments
+   - Config-driven with dataclass-based configs (`PretrainingConfig`, `FinetuningConfig`, `ConfidenceExperimentConfig`)
    - Multi-seed experiments (default 5 seeds) for statistical significance
+   - **Confidence-aware experiments**: Compare ConfidenceAwareGPT (two-pass lookahead) vs standard MiniGPT
 
 4. **Dataset Handlers** (`dendritic/dataset_handlers/`): Factory pattern for dataset loading
    - `BaseDatasetHandler`: Abstract base class
