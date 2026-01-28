@@ -1,16 +1,16 @@
 # dendritic/experiments/run_experiments.py
 """
-Main script to run both .
+Main script to run dendritic layer experiments.
 
 Usage:
     python -m dendritic.experiments.run_experiments --experiment pretraining
     python -m dendritic.experiments.run_experiments --experiment finetuning
     python -m dendritic.experiments.run_experiments --experiment both
+    python -m dendritic.experiments.run_experiments --experiment confidence
 """
 
 # Standard library imports
 import argparse
-from calendar import c
 import logging
 import multiprocessing
 import os
@@ -40,8 +40,22 @@ from dendritic.experiments.utils.ExperimentResults import ExperimentResults
 from dendritic.experiments.utils.experiment_finetuning import (
     FinetuningConfig,
     FinetuningExperimentResults,
+    load_finetuning_data,
+)
+from dendritic.experiments.utils.experiment_pretraining import (
+    train_config_with_models,
+)
+from dendritic.experiments.utils.sweep import variant_identifier
+from dendritic.experiments.utils.experiment_utils import (
+    set_random_seed,
+    setup_logging,
+    debug_dataset_integrity,
 )
 from dendritic.dataset_handlers.factory import get_handler
+
+# Confidence experiment imports
+from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
+from dendritic.experiments.confidence.experiment import ConfidenceAwareExperiment
 
 # Environment configuration
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
@@ -102,9 +116,9 @@ def run_pretraining_experiment(
 
     for cfg in scheduler_variants_list:
         logger.info(f"Pretraining config: {cfg}")
-        variant_id = _variant_identifier(cfg.param_grid)
+        variant_id = variant_identifier(cfg.param_grid)
         logger.info(f"Training variant: {variant_id}")
-        wave_results = _train_config_with_models(cfg, device, num_workers, tokenizer)
+        wave_results = train_config_with_models(cfg, device, num_workers, tokenizer)
         results_by_variant[variant_id] = wave_results
 
     # Save consolidated results
@@ -130,7 +144,7 @@ def main() -> None:
     parser.add_argument(
         "--experiment",
         type=str,
-        choices=["pretraining", "finetuning", "both"],
+        choices=["pretraining", "finetuning", "both", "confidence"],
         default="both",
         help="Which experiment to run",
     )
@@ -152,6 +166,12 @@ def main() -> None:
         "--dataset",
         type=str,
         help="Dataset identifier for pretraining (e.g., 'wikitext', 'openwebmath')",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="Number of worker processes for data loading (default: 0)",
     )
 
     args = parser.parse_args()
@@ -191,6 +211,33 @@ def main() -> None:
         logger.info("RUNNING FINETUNING EXPERIMENT")
         logger.info("=" * 70)
         run_finetuning_experiment_wrapper(args.device, args.num_workers)
+
+    if args.experiment == "confidence":
+        logger.info("\n" + "=" * 70)
+        logger.info("RUNNING CONFIDENCE-AWARE EXPERIMENT")
+        logger.info("=" * 70)
+        # Create tokenizer (same as other experiments)
+        tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        tokenizer.pad_token = tokenizer.eos_token
+        
+        # Create configuration with reasonable defaults
+        config = ConfidenceExperimentConfig(
+            training_steps=1000,  # Reasonable for PoC
+            seeds=[42, 123, 456],  # Multiple seeds for statistical significance
+            batch_size=4,
+            vocab_size=50257,  # GPT-2 vocab size
+            embed_dim=256,
+            num_heads=8,
+            num_layers=6,
+            max_seq_len=128,
+            dropout=0.1,
+            results_dir="results/confidence_experiments",
+        )
+        
+        # Run the experiment
+        experiment = ConfidenceAwareExperiment(config)
+        results = experiment.run(tokenizer)
+        logger.info(f"Confidence experiment completed. Results saved to {config.results_dir}")
 
     logger.info("\nAll experiments complete!")
 
@@ -241,257 +288,6 @@ def run_finetuning_experiment_wrapper(
         torch.cuda.empty_cache()
     if results is None:
         raise RuntimeError("Finetuning experiment failed without returning results")
-    return results
-
-
-def set_random_seed(seed: int) -> None:
-    """Set seeds for reproducibility across random, NumPy, and PyTorch."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def setup_logging(log_level: int | None = None) -> logging.Logger:
-    """Configure logging."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    logger = logging.getLogger(__name__)
-    # Remove any existing handlers to avoid duplicate logs
-    logger.handlers.clear()
-    logger.propagate = False
-    level = log_level if log_level is not None else logging.INFO
-    logger.setLevel(level)
-
-    # Stream handler
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(level)
-
-    # File handler
-    file_handler = logging.FileHandler(Path(f"experiment_{timestamp}.log"))
-    file_handler.setLevel(level)
-
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    stream_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
-
-    logger.addHandler(stream_handler)
-    logger.addHandler(file_handler)
-
-    # Ensure root logger also has a stream handler for modules that log via logging.info
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-    # Remove existing stream handlers to avoid duplicates
-    root_stream_handlers = [
-        h for h in root_logger.handlers if isinstance(h, logging.StreamHandler)
-    ]
-    for h in root_stream_handlers:
-        root_logger.removeHandler(h)
-    # Add a single stream handler if none exist
-    if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
-        root_stream_handler = logging.StreamHandler()
-        root_stream_handler.setLevel(level)
-        root_stream_handler.setFormatter(formatter)
-        root_logger.addHandler(root_stream_handler)
-
-    return logger
-
-
-def debug_dataset_integrity(
-    dataset, tokenizer: GPT2Tokenizer, logger: logging.Logger
-) -> None:
-    """
-    Inspect a single batch from the dataset and log debugging information.
-    This replicates the previous print‑based debugging block but uses the
-    provided logger at DEBUG level.
-    """
-    # Create a temporary loader to grab one batch
-    debug_loader = DataLoader(dataset, batch_size=4)  # type: ignore
-    batch = next(iter(debug_loader))
-
-    inp = batch["input_ids"]
-    lbl = batch["labels"]
-    pad_id = tokenizer.pad_token_id
-
-    # 1. Check Ratio of Padding
-    total_tokens = inp.numel()
-    pad_tokens = (inp == pad_id).sum().item()
-    logger.debug(f"Batch Shape: {inp.shape}")
-    logger.debug(f"Pad Token ID: {pad_id}")
-    logger.debug(
-        f"Padding Ratio: {pad_tokens / total_tokens:.2%} ({pad_tokens}/{total_tokens} tokens)"
-    )
-
-    # 2. Check Masking (Crucial for correct PPL)
-    masked_tokens = (lbl == -100).sum().item()
-    logger.debug(f"Masked Label Ratio (-100): {masked_tokens / total_tokens:.2%}")
-
-    # 3. Visual Inspection
-    logger.debug("-" * 20 + " Sample 0 (Decoded) " + "-" * 20)
-    logger.debug("".join(tokenizer.decode(inp[0])))
-    logger.debug("-" * 20 + " Sample 0 (Raw IDs) " + "-" * 20)
-    logger.debug(inp[0].tolist())
-    logger.debug("-" * 20 + " Sample 0 (Labels) " + "-" * 20)
-    logger.debug(lbl[0].tolist())
-    logger.debug("!" * 40 + "\n")
-
-
-# Helper to create a human‑readable identifier for a config variant
-def _variant_identifier(param_grid: dict[str, Any] | None) -> str:
-    """Generate a concise identifier based on the cohort scheduler configuration."""
-
-    return (
-        "-".join(f"{k}:{v}" for k, v in param_grid.items())
-        if param_grid
-        else "baseline"
-    )
-
-    if cfg.cohort_scheduler is None:
-        return "no_scheduler"
-    cs = cfg.cohort_scheduler
-    return f"min{cs.min_mult}_max{cs.max_mult}_sharp{cs.sharpness}"
-
-
-def load_finetuning_data(
-    tokenizer: GPT2Tokenizer,
-    max_length: int = 256,
-    batch_size: int = 4,
-    num_workers: int | None = None,
-) -> tuple[DataLoader, DataLoader]:
-    """Load finetuning data using either the PythonAlpacaHandler or a fallback dataset.
-
-    Parameters
-    ----------
-    tokenizer : GPT2Tokenizer
-        Tokenizer to use for text tokenization.
-    max_length : int, optional
-        Maximum sequence length for tokenization. Defaults to 256.
-    batch_size : int, optional
-        Batch size for the DataLoaders. Defaults to 4.
-    num_workers : int | None, optional
-        Number of worker processes for DataLoader. If ``None`` defaults to 0.
-
-    Returns
-    -------
-    tuple[DataLoader, DataLoader]
-        Training and evaluation DataLoaders.
-    """
-    # Try to use your handler, fall back to a simple alternative
-    try:
-        from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
-
-        handler = PythonAlpacaHandler(tokenizer, max_length=max_length)
-        prepared = handler.prepare_data(test_size=0.1)
-
-        train_dataloader = DataLoader(
-            prepared["train"],
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers if num_workers is not None else 0,
-        )
-        eval_dataloader = DataLoader(
-            prepared["eval"],
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers if num_workers is not None else 0,
-        )
-    except ImportError:
-        # Fallback: use a code dataset from HuggingFace
-        from datasets import load_dataset, Dataset
-
-        dataset = load_dataset(
-            "codeparrot/codeparrot-clean-valid", split="train[:10000]"
-        )
-        assert isinstance(dataset, Dataset)
-
-        def tokenize_fn(examples):
-            tokenized = tokenizer(
-                examples["content"],
-                truncation=True,
-                max_length=max_length,
-                padding="max_length",
-            )
-            tokenized["labels"] = tokenized.input_ids.copy()
-            # Mask padding
-            tokenized["labels"] = [
-                [-100 if tok == tokenizer.pad_token_id else tok for tok in labels]
-                for labels in tokenized.labels
-            ]
-            return tokenized
-
-        dataset = dataset.map(
-            tokenize_fn, batched=True, remove_columns=dataset.column_names
-        )
-        dataset.set_format("torch")
-
-        split = dataset.train_test_split(test_size=0.1)
-
-        train_dataloader = DataLoader(
-            split["train"],  # type: ignore
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers if num_workers is not None else 0,
-        )
-        eval_dataloader = DataLoader(
-            split["test"],  # type: ignore
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers if num_workers is not None else 0,
-        )
-
-    return train_dataloader, eval_dataloader
-
-
-def _train_config_with_models(
-    config: PretrainingConfig,
-    device: str,
-    num_workers: int | None,
-    tokenizer: GPT2Tokenizer,
-) -> ExperimentResults:
-    """Train specified models under a single configuration."""
-    from dendritic.experiments.utils.experiment_pretraining import (
-        PretrainingExperiment,
-        ModelVariant,
-    )
-
-    experiment = PretrainingExperiment(config=config)
-    handler = get_handler(config.dataset, tokenizer)
-    dataloaders = handler.prepare_pretraining_dataloaders(
-        config=config,
-        num_workers=num_workers,
-    )
-    train_dl = dataloaders["train"]
-    eval_dl = dataloaders["eval"]
-
-    model = experiment._build_model(mlp_type=experiment.config.layer_type, dropout=experiment.config.dropout)  # type: ignore
-    model_variant = ModelVariant(
-        name=config.layer_type,
-        model=model,
-        results=[],
-        optimizer=torch.optim.AdamW(
-            model.parameters(),
-            lr=experiment.config.learning_rate,  # type: ignore
-            weight_decay=experiment.config.weight_decay,  # type: ignore
-            betas=(0.9, 0.95),
-            fused=True,
-        ),
-    )
-
-    try:
-        # Ensure deterministic behavior for each seed
-        results: ExperimentResults | None = None
-        for seed in experiment.config.seeds:
-            set_random_seed(seed)
-            results = experiment.run(
-                train_dl, eval_dl, model_variants=[model_variant], device=device
-            )
-            torch._dynamo.reset()
-    finally:
-        # Ensure GPU memory is freed even on error
-        torch._dynamo.reset()
-        torch.cuda.empty_cache()
-    if results is None:
-        raise RuntimeError("Pretraining experiment failed without returning results")
     return results
 
 

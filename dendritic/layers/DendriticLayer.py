@@ -55,7 +55,6 @@ class DendriticLayer(DendriticStack):
         poly_rank: int = 16,
         independent_inputs: bool = False,
         diag_rank: int | Literal["auto"] = "auto",
-        init_scale: float = 0.1,
         bias: bool = True,
         *args,
         **kwargs,
@@ -67,7 +66,6 @@ class DendriticLayer(DendriticStack):
             poly_degree=2,
             independent_inputs=independent_inputs,
             diag_rank=diag_rank,
-            init_scale=init_scale,
             bias=bias,
             include_linear=True,
         )
@@ -79,7 +77,6 @@ class DendriticLayer(DendriticStack):
         poly_rank=16,
         independent_inputs=False,
         diag_rank: int | Literal["auto"] = "auto",
-        init_scale=0.1,
         bias=True,
         *args,
         **kwargs,

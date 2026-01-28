@@ -32,7 +32,6 @@ def generate_scheduler_variants(
         List of configuration objects, each with distinct parameter values.
     """
 
-
     keys, values = zip(*param_grid.items())
     variants = []
     params = {}
@@ -51,8 +50,27 @@ def generate_scheduler_variants(
             else:
                 setattr(cfg, cfg_field, val)
             params[key] = val
-        
+
         cfg.param_grid = deepcopy(params)
         variants.append(cfg)
 
     return variants
+
+
+def variant_identifier(param_grid: dict[str, object] | None) -> str:
+    """Generate a concise identifier based on the param grid.
+
+    Parameters
+    ----------
+    param_grid : dict[str, object] | None
+        Parameter grid mapping parameter names to values.
+
+    Returns
+    -------
+    str
+        Identifier string like "dropout:0.0-layer_type:standard".
+        Returns "baseline" if param_grid is None or empty.
+    """
+    if not param_grid:
+        return "baseline"
+    return "-".join(f"{k}:{v}" for k, v in param_grid.items())
