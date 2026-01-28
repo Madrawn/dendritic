@@ -3,15 +3,20 @@ from dendritic.layers.DendriticLayer import DendriticLayer
 
 import pytest
 import torch
+
+
 @pytest.fixture
 def dendritic_layer(layer_config):
     input_dim, output_dim, poly_rank = layer_config
     return DendriticLayer(input_dim, output_dim, poly_rank=poly_rank)
+
+
 # Fixtures for common test configurations
 @pytest.fixture(params=[(64, 32, 8), (128, 64, 16), (256, 128, 32)])
 def layer_config(request):
     input_dim, output_dim, poly_rank = request.param
     return input_dim, output_dim, poly_rank
+
 
 # ===================
 # DendriticLayer Tests
@@ -48,7 +53,7 @@ class TestDendriticLayer:
     def test_weight_initialization(self, dendritic_layer):
         # Check weights are initialized properly
         for name, param in dendritic_layer.named_parameters():
-            if 'weight' in name:
+            if "weight" in name:
                 assert not torch.allclose(param, torch.zeros_like(param))
                 assert not torch.isnan(param).any()
 
@@ -95,13 +100,21 @@ class TestDendriticLayer:
 
         # Manually set weights to known values
         with torch.no_grad():
-            layer.w1.data = torch.tensor([[1.0, 0.0]])
-            layer.w2.data = torch.tensor([[0.0, 1.0]])
-            layer.poly_out.data = torch.tensor([[1.0]])
-            layer.linear.weight.data = torch.zeros_like(layer.linear.weight)
-            layer.linear.bias.data = torch.zeros_like(layer.linear.bias)
-            layer.scale.data = torch.tensor([1.0])
+            # Use copy_ to modify the underlying projections tensor
+            layer.w1.data.copy_(torch.tensor([[1.0, 0.0]]))
+            layer.w2.data.copy_(torch.tensor([[0.0, 1.0]]))
 
+            # Zero out the biases (reset_parameters fills them with small noise)
+            layer.proj_biases.data.zero_()
+
+            layer.poly_out.data.copy_(torch.tensor([[1.0]]))
+            layer.linear.weight.data.zero_()
+            layer.linear.bias.data.zero_()
+
+            # Note: alpha_grad_boost is 1e-3, so if you want
+            # an effective alpha of 1.0, set alpha to 0.999
+            # OR just account for the 1.001 multiplier in the assertion.
+            layer.alpha.data.fill_(1.0 - layer.alpha_grad_boost)
         x = torch.tensor([[2.0, 3.0]])
         y = layer(x)
         assert torch.allclose(y, torch.tensor([[6.0]]), atol=1e-4)  # 2*3 = 6

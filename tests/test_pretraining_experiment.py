@@ -25,7 +25,7 @@ class DummyDataset(Dataset):
 
 
 # @pytest.mark.slow
-@pytest.mark.unit
+@pytest.mark.integration
 def test_pretraining_experiment_end_to_end():
     # ------------------------------------------------------------------
     # Configuration – keep everything tiny for a fast test
