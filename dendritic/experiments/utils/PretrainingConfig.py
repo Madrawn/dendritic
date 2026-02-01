@@ -93,7 +93,9 @@ class PretrainingConfig(AutoVivifyMixin):
     )
 
     # Evaluation
-    eval_interval: int | None = 30  # If None, set in __post_init__
+    effective_eval_interval: int | None = (
+        None  # If None, computed as training_steps // 20
+    )
 
     eval_batches: int = 15
 
@@ -120,8 +122,8 @@ class PretrainingConfig(AutoVivifyMixin):
         return self.training_steps // 20
 
     @property
-    def effective_eval_interval(self) -> int:
+    def eval_interval(self) -> int:
         """Handle the 'dynamic default' logic without __post_init__."""
-        if self.eval_interval is not None:
-            return self.eval_interval
+        if self.effective_eval_interval is not None:
+            return self.effective_eval_interval
         return max(self.training_steps // 20, 1)

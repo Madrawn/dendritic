@@ -155,7 +155,6 @@ def _create_modified_config(config: ConfidenceExperimentConfig) -> PretrainingCo
         plateau_cooldown=config.plateau_cooldown,
         plateau_min_lr=config.plateau_min_lr,
         early_stop_multiplier=config.early_stop_multiplier,
-        eval_interval=config.eval_interval,
         eval_batches=config.eval_batches,
         seeds=config.seeds,
         cohort_scheduler=config.cohort_scheduler,

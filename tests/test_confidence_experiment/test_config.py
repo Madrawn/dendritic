@@ -101,7 +101,7 @@ def test_config_post_init():
     assert config.results_dir == "my/results"
 
     # Test that parent __post_init__ is called
-    config = ConfidenceExperimentConfig(eval_interval=None)
+    config = ConfidenceExperimentConfig()
     assert config.eval_interval == max(config.training_steps // 20, 1)
 
 
