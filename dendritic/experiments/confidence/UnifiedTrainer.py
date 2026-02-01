@@ -422,14 +422,14 @@ class UnifiedTrainer:
                     avg_train_lm_loss = avg_train_lm_loss_tensor.item()
                     avg_train_conf_loss = avg_train_conf_loss_tensor.item()
                     logging.info(
-                        f"{self.model_type} seed={seed} step={step+1}: "
+                        f"{self.model_type} seed={seed} step={step + 1}: "
                         f"train_lm={avg_train_lm_loss:.4f}, train_conf={avg_train_conf_loss:.4f}, "
                         f"avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
                     )
                 else:
                     # Standard model: keep original format
                     logging.info(
-                        f"{self.model_type} seed={seed} step={step+1}: "
+                        f"{self.model_type} seed={seed} step={step + 1}: "
                         f"train={avg_train_loss:.4f}, avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
                     )
 

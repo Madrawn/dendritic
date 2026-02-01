@@ -142,7 +142,7 @@ class DendriticStack(nn.Module):
         # Degree-k pathway via k-way product
 
         self.projections = nn.Parameter(torch.empty(poly_degree, poly_rank, input_dim))
-        self.proj_biases  = nn.Parameter(torch.zeros(poly_degree, poly_rank))
+        self.proj_biases = nn.Parameter(torch.zeros(poly_degree, poly_rank))
 
         self.poly_out = nn.Parameter(torch.empty(output_dim, poly_rank))
         # Optional diagonal
@@ -168,8 +168,6 @@ class DendriticStack(nn.Module):
         if self.use_diagonal:
             self.alpha_diag = nn.Parameter(torch.zeros(1))
 
-
-
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -193,16 +191,17 @@ class DendriticStack(nn.Module):
             nn.init.orthogonal_(self.w_diag_in, gain=0.1)
             nn.init.orthogonal_(self.w_diag_out, gain=0.1)
 
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Linear path: preserves leading dims
         out = self.linear(x)
 
         # Degree-k product via vectorized projections
         # x: [..., D], projections: [K, R, D], biases: [K, R]
-        logits = torch.einsum('...d,krd->...kr', x, self.projections) + self.proj_biases  # [..., K, R]
-        poly = logits.prod(dim=-2)                    # [..., R]
-        poly_out = F.linear(poly, self.poly_out)      # [..., O]
+        logits = (
+            torch.einsum("...d,krd->...kr", x, self.projections) + self.proj_biases
+        )  # [..., K, R]
+        poly = logits.prod(dim=-2)  # [..., R]
+        poly_out = F.linear(poly, self.poly_out)  # [..., O]
 
         # Gated sum with gradient-boost trick
         alpha_eff = self.alpha + self.alpha_grad_boost
@@ -212,14 +211,13 @@ class DendriticStack(nn.Module):
         if self.use_diagonal:
             assert self.w_diag_in is not None and self.w_diag_out is not None
             # Diagonal squared terms
-            h = F.linear(x, self.w_diag_in)           # [..., R_d]
-            diag = F.linear(h * h, self.w_diag_out)   # [..., O]
+            h = F.linear(x, self.w_diag_in)  # [..., R_d]
+            diag = F.linear(h * h, self.w_diag_out)  # [..., O]
             alpha_diag_eff = self.alpha_diag + self.alpha_grad_boost
             out = out + self.alpha_diag * diag
             out = out + (alpha_diag_eff - self.alpha_diag).detach() * diag
 
         return out
-
 
 
 try:

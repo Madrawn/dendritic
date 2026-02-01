@@ -149,7 +149,7 @@ def convert_to_inhibitory_attention(model, layer_indices=[12, 13, 14]):
             # Biases if they exist
             if old_attn.q_proj.bias is not None:
                 new_attn.W_q.bias.copy_(old_attn.q_proj.bias)
-                
+
                 # ... etc
 
         # The drift probe is randomly initialized — needs training

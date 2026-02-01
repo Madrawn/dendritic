@@ -8,12 +8,9 @@ class DendriticStackPretrainingMLP(nn.Module):
 
     Uses DendriticStack as the main transformation layer.
     """
+
     def __init__(
-        self,
-        embed_dim: int,
-        hidden_dim: int,
-        poly_rank: int = 16,
-        dropout: float = 0.0
+        self, embed_dim: int, hidden_dim: int, poly_rank: int = 16, dropout: float = 0.0
     ):
         super().__init__()
 

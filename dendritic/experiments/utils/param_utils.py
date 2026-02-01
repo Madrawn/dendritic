@@ -13,17 +13,18 @@ from .PretrainingConfig import PretrainingConfig
 @dataclass
 class ParamBreakdown:
     """Detailed parameter breakdown for a model or layer."""
+
     total: int
     trainable: int
     frozen: int
     by_component: Dict[str, int]
-    
+
     def __repr__(self) -> str:
         lines = [
             f"Total:     {self.total:,}",
-            f"Trainable: {self.trainable:,} ({100*self.trainable/self.total:.2f}%)",
+            f"Trainable: {self.trainable:,} ({100 * self.trainable / self.total:.2f}%)",
             f"Frozen:    {self.frozen:,}",
-            "\nBy component:"
+            "\nBy component:",
         ]
         for name, count in sorted(self.by_component.items(), key=lambda x: -x[1]):
             lines.append(f"  {name}: {count:,}")
@@ -33,47 +34,43 @@ class ParamBreakdown:
 def count_parameters(model: nn.Module, prefix: str = "") -> ParamBreakdown:
     """
     Count parameters with detailed breakdown.
-    
+
     Args:
         model: PyTorch model
         prefix: Optional prefix for component names
-        
+
     Returns:
         ParamBreakdown with total, trainable, frozen, and per-component counts
     """
     total = 0
     trainable = 0
     by_component: Dict[str, int] = {}
-    
+
     for name, param in model.named_parameters():
         count = param.numel()
         total += count
         if param.requires_grad:
             trainable += count
-        
+
         # Group by top-level component
         component = name.split(".")[0] if "." in name else name
         full_name = f"{prefix}.{component}" if prefix else component
         by_component[full_name] = by_component.get(full_name, 0) + count
-    
+
     return ParamBreakdown(
         total=total,
         trainable=trainable,
         frozen=total - trainable,
-        by_component=by_component
+        by_component=by_component,
     )
 
 
 def count_dendritic_layer_params(
-    input_dim: int,
-    output_dim: int,
-    poly_rank: int,
-    diag_rank: int,
-    bias: bool = True
+    input_dim: int, output_dim: int, poly_rank: int, diag_rank: int, bias: bool = True
 ) -> int:
     """
     Calculate exact parameter count for a DendriticLayer.
-    
+
     Parameters:
     - Linear: input_dim * output_dim + (output_dim if bias)
     - W1, W2: 2 * poly_rank * input_dim
@@ -84,6 +81,7 @@ def count_dendritic_layer_params(
     - diag_scale: 1 (if diag_rank > 0)
     """
     from dendritic.layers.DendriticLayer import DendriticLayer
+
     return DendriticLayer.parameter_count(
         input_dim=input_dim,
         output_dim=output_dim,
@@ -102,16 +100,16 @@ def count_dendritic_stack_params(
     bias: bool = True,
     preserve_linear_path: bool = True,
     poly_degree: int = 3,
-    independent_inputs: bool = False
+    independent_inputs: bool = False,
 ) -> int:
     """
     Calculate exact parameter count for a DendriticStack (new architecture).
-    
+
     The new DendriticStack consists of:
     - Linear pathway (preserved for initialization)
     - Degree-k polynomial pathway with k = poly_degree projections
     - Optional diagonal pathway
-    
+
     Parameters:
         input_dim, output_dim: layer dimensions
         poly_rank: rank of polynomial projections
@@ -122,6 +120,7 @@ def count_dendritic_stack_params(
         independent_inputs: if True, diag_rank = poly_rank; else diag_rank = max(4, poly_rank // 4)
     """
     from dendritic.layers.DendriticStack import DendriticStack
+
     return DendriticStack.parameter_count(
         input_dim=input_dim,
         output_dim=output_dim,
@@ -137,15 +136,15 @@ def count_dendritic_stack_params(
 def count_lora_params(
     target_modules: List[Tuple[int, int]],  # List of (in_features, out_features)
     rank: int,
-    use_bias: bool = False
+    use_bias: bool = False,
 ) -> int:
     """
     Calculate LoRA parameter count.
-    
+
     LoRA adds two low-rank matrices per adapted layer:
     - A: (in_features, rank)
     - B: (rank, out_features)
-    
+
     Total per layer: rank * (in_features + out_features)
     """
     total = 0
@@ -157,12 +156,11 @@ def count_lora_params(
 
 
 def calculate_matching_lora_rank(
-    dendritic_trainable_params: int,
-    target_modules: List[Tuple[int, int]]
+    dendritic_trainable_params: int, target_modules: List[Tuple[int, int]]
 ) -> int:
     """
     Calculate LoRA rank that matches dendritic trainable parameter count.
-    
+
     Solves: rank * sum(in_i + out_i) = dendritic_trainable_params
     """
     total_dim_sum = sum(in_f + out_f for in_f, out_f in target_modules)
@@ -174,27 +172,27 @@ def calculate_matching_mlp_hidden_dim(
     target_params: int,
     embed_dim: int,
     num_layers: int,
-    other_params: int  # Params from attention, embeddings, etc.
+    other_params: int,  # Params from attention, embeddings, etc.
 ) -> int:
     """
     Calculate MLP hidden dimension to match target parameter count.
-    
+
     Standard MLP params per layer:
     - fc1: embed_dim * hidden_dim + hidden_dim (bias)
     - fc2: hidden_dim * embed_dim + embed_dim (bias)
     Total per layer: 2 * embed_dim * hidden_dim + hidden_dim + embed_dim
-    
+
     Solving for hidden_dim:
     mlp_params = target_params - other_params
     mlp_params = num_layers * (2 * embed_dim * hidden_dim + hidden_dim + embed_dim)
     """
     mlp_budget = target_params - other_params
     per_layer = mlp_budget / num_layers
-    
+
     # 2 * embed_dim * h + h + embed_dim = per_layer
     # h * (2 * embed_dim + 1) = per_layer - embed_dim
     hidden_dim = (per_layer - embed_dim) / (2 * embed_dim + 1)
-    
+
     return max(1, round(hidden_dim))
 
 
@@ -202,54 +200,56 @@ def verify_param_match(
     model_a: nn.Module,
     model_b: nn.Module,
     tolerance: float = 0.02,
-    trainable_only: bool = False
+    trainable_only: bool = False,
 ) -> Tuple[bool, Dict[str, Any]]:
     """
     Verify two models have matching parameter counts within tolerance.
-    
+
     Args:
         model_a, model_b: Models to compare
         tolerance: Acceptable relative difference (default 2%)
         trainable_only: Only compare trainable parameters
-        
+
     Returns:
         (is_matched, details_dict)
     """
     breakdown_a = count_parameters(model_a)
     breakdown_b = count_parameters(model_b)
-    
+
     if trainable_only:
         count_a = breakdown_a.trainable
         count_b = breakdown_b.trainable
     else:
         count_a = breakdown_a.total
         count_b = breakdown_b.total
-    
+
     diff = abs(count_a - count_b)
     rel_diff = diff / max(count_a, count_b)
-    
+
     details = {
         "model_a_params": count_a,
         "model_b_params": count_b,
         "absolute_diff": diff,
         "relative_diff": rel_diff,
         "breakdown_a": breakdown_a,
-        "breakdown_b": breakdown_b
+        "breakdown_b": breakdown_b,
     }
-    
+
     return rel_diff <= tolerance, details
 
 
 def calculate_mlp_params_dendritic_stack(
-    embed_dim: int,
-    hidden_dim: int,
-    poly_rank: int,
-    diag_rank: Optional[int] = None
+    embed_dim: int, hidden_dim: int, poly_rank: int, diag_rank: Optional[int] = None
 ) -> int:
     """Calculate DendriticStack MLP parameters."""
     # DendriticStack parameters (new architecture)
     stack_params = count_dendritic_stack_params(
-        embed_dim, hidden_dim, poly_rank, diag_rank=diag_rank, bias=True, preserve_linear_path=True
+        embed_dim,
+        hidden_dim,
+        poly_rank,
+        diag_rank=diag_rank,
+        bias=True,
+        preserve_linear_path=True,
     )
     # Standard fc2
     fc2_params = hidden_dim * embed_dim + embed_dim
@@ -261,7 +261,7 @@ def calculate_mlp_params_dendritic(
     hidden_dim: int,
     poly_rank: int,
     diag_rank: int | None = None,
-    poly_degree: int | None = None
+    poly_degree: int | None = None,
 ) -> int:
     """Calculate DendriticMLP parameters."""
     if diag_rank is None:
@@ -269,8 +269,14 @@ def calculate_mlp_params_dendritic(
 
     # DendriticLayer (fc1)
     from .param_utils import count_dendritic_layer_params
+
     dendritic_fc1 = count_dendritic_stack_params(
-        embed_dim, hidden_dim, poly_rank, diag_rank, bias=True, poly_degree=poly_degree or 2
+        embed_dim,
+        hidden_dim,
+        poly_rank,
+        diag_rank,
+        bias=True,
+        poly_degree=poly_degree or 2,
     )
 
     # Standard fc2
@@ -316,10 +322,10 @@ def calculate_non_mlp_params(config: PretrainingConfig) -> int:
     final_ln_params = 2 * embed_dim
 
     total = (
-        tok_emb_params +
-        pos_emb_params +
-        num_layers * per_layer_params +
-        final_ln_params
+        tok_emb_params
+        + pos_emb_params
+        + num_layers * per_layer_params
+        + final_ln_params
     )
 
     return total
@@ -352,8 +358,9 @@ def find_matching_hidden_dims(config: PretrainingConfig) -> tuple[int, int]:
     diag_rank = max(4, poly_rank // 4)
 
     def dendritic_mlp_params(h: int) -> int:
-        return calculate_mlp_params_dendritic(embed_dim, h, poly_rank, diag_rank, poly_degree=config.poly_degree)
-
+        return calculate_mlp_params_dendritic(
+            embed_dim, h, poly_rank, diag_rank, poly_degree=config.poly_degree
+        )
 
     # Search for dendritic hidden_dim
     lo, hi = embed_dim, 8 * embed_dim
@@ -376,5 +383,7 @@ def find_matching_hidden_dims(config: PretrainingConfig) -> tuple[int, int]:
                 best_diff = diff
                 best_dendritic = h
 
-    print(f"Baseline hidden_dim: {baseline_hidden}, Dendritic hidden_dim: {best_dendritic}")
+    print(
+        f"Baseline hidden_dim: {baseline_hidden}, Dendritic hidden_dim: {best_dendritic}"
+    )
     return baseline_hidden, best_dendritic

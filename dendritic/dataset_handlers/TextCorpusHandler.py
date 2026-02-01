@@ -208,9 +208,9 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         dict[str, Any]
             {'train': Dataset, 'test': Dataset}
         """
-        assert (
-            streaming
-        ), "This method requires streaming=True to avoid large downloads. Don't you dare run it with streaming=False!"
+        assert streaming, (
+            "This method requires streaming=True to avoid large downloads. Don't you dare run it with streaming=False!"
+        )
         # 1. Load dataset (streaming or not)
         ds = load_dataset(
             self.dataset_name,

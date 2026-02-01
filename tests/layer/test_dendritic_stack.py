@@ -3,16 +3,21 @@ from dendritic.layers.DendriticStack import DendriticStack
 
 import pytest
 import torch
+
+
 # Fixtures for common test configurations
 @pytest.fixture(params=[(64, 32, 8), (128, 64, 16), (256, 128, 32)])
 def layer_config(request):
     input_dim, output_dim, poly_rank = request.param
     return input_dim, output_dim, poly_rank
 
+
 @pytest.fixture
 def dendritic_stack(layer_config):
     input_dim, output_dim, poly_rank = layer_config
     return DendriticStack(input_dim, output_dim, poly_rank=poly_rank)
+
+
 # ===================
 # DendriticStack Tests
 # ===================

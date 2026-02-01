@@ -2,6 +2,7 @@
 """
 Validate that confidence model evaluation now uses full sequence loss.
 """
+
 import sys
 
 sys.path.insert(0, ".")
@@ -10,7 +11,6 @@ import torch
 import numpy as np
 import logging
 
-logging.basicConfig(level=logging.INFO)
 
 from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
 from dendritic.experiments.confidence.data_loader import prepare_confidence_data
@@ -22,6 +22,8 @@ from dendritic.experiments.confidence.StandardTrainingStrategy import (
 )
 from dendritic.experiments.models.MiniGPT import MiniGPT, ConfidenceAwareGPT
 from transformers import AutoTokenizer
+
+logging.basicConfig(level=logging.INFO)
 
 
 def main():
@@ -120,7 +122,7 @@ def main():
 
     # Compare
     print(
-        f"Loss ratio (confidence/standard): {conf_loss/std_loss if std_loss != 0 else 'inf'}"
+        f"Loss ratio (confidence/standard): {conf_loss / std_loss if std_loss != 0 else 'inf'}"
     )
 
     # Also compute loss using direct forward (full sequence) for sanity

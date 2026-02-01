@@ -5,9 +5,11 @@ from dendritic.experiments.utils.TrainingResult import TrainingResult
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
+
 @dataclass
 class ExperimentResults:
     """Aggregated results from pretraining experiment."""
+
     model_results: Dict[str, List[TrainingResult]]
     statistical_analysis: Dict[str, Any]
     config: PretrainingConfig

@@ -120,7 +120,6 @@ def test_parameter_count() -> Tuple[int, int]:
         and isinstance(layer.diag_rank, int)
         and layer.diag_rank > 0
     ):
-
         expected = (
             DEFAULT_INPUT_DIM * DEFAULT_OUTPUT_DIM
             + DEFAULT_OUTPUT_DIM
@@ -135,7 +134,6 @@ def test_parameter_count() -> Tuple[int, int]:
         )
 
     else:
-
         expected = (
             DEFAULT_INPUT_DIM * DEFAULT_OUTPUT_DIM
             + DEFAULT_OUTPUT_DIM  # linear
@@ -145,9 +143,9 @@ def test_parameter_count() -> Tuple[int, int]:
             + 1  # alpha
         )
 
-    assert (
-        n_params == expected
-    ), f"{n_params} != {expected} (expected calculation may need update)"
+    assert n_params == expected, (
+        f"{n_params} != {expected} (expected calculation may need update)"
+    )
 
     print("✓ Parameter count tests passed")
     return n_params, n_params_stack
@@ -353,9 +351,9 @@ def test_gate_and_bias_gradients() -> None:
             ), f"[{name}] alpha.grad is None in Phase A"
             # typically non-zero; we don't hard fail on 0.0 since it's technically possible on symmetric losses,
             # but it's extremely unlikely with random inputs and 'sum' loss.
-            assert (
-                model.alpha.grad.abs().sum().item() != 0.0
-            ), f"[{name}] alpha.grad is zero in Phase A"
+            assert model.alpha.grad.abs().sum().item() != 0.0, (
+                f"[{name}] alpha.grad is zero in Phase A"
+            )
 
         # alpha_diag (if diagonal is enabled) should also have gradient
         if getattr(model, "use_diagonal", False) and hasattr(model, "alpha_diag"):
@@ -386,9 +384,9 @@ def test_gate_and_bias_gradients() -> None:
             assert (
                 isinstance(model.alpha, torch.Tensor) and model.alpha.grad is not None
             ), f"[{name}] alpha.grad is None in Phase B"
-            assert (
-                model.alpha.grad.abs().sum().item() != 0.0
-            ), f"[{name}] alpha.grad is zero in Phase B"
+            assert model.alpha.grad.abs().sum().item() != 0.0, (
+                f"[{name}] alpha.grad is zero in Phase B"
+            )
 
         print(f"✓ Gradient gate/bias checks passed for {name}")
 

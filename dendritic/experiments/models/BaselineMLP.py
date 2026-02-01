@@ -4,6 +4,7 @@ import torch.nn as nn
 
 class BaselineMLP(nn.Module):
     """Standard MLP block for transformer."""
+
     def __init__(self, embed_dim: int, hidden_dim: int, dropout: float = 0.0):
         super().__init__()
         self.fc1 = nn.Linear(embed_dim, hidden_dim)

@@ -1,5 +1,3 @@
-
-
 import datetime
 import json
 import os
@@ -31,7 +29,7 @@ class ExperimentTracker:
             "params": params,
             "resources": {},
             "metrics": {},
-            "training_samples": []
+            "training_samples": [],
         }
 
     def add_metric(self, name, value, step=None):
@@ -39,18 +37,18 @@ class ExperimentTracker:
         if step is not None:
             if "training_samples" not in self.results:
                 self.results["training_samples"] = []
-            self.results["training_samples"].append({
-                "step": step,
-                "time_sec": time.time() - self.start_time,
-                name: value
-            })
+            self.results["training_samples"].append(
+                {"step": step, "time_sec": time.time() - self.start_time, name: value}
+            )
         else:
             self.results["metrics"][name] = value
 
     def finalize(self, model):
         """Save experiment results to file."""
         # Record final stats
-        self.results["resources"]["total_time_min"] = (time.time() - self.start_time) / 60
+        self.results["resources"]["total_time_min"] = (
+            time.time() - self.start_time
+        ) / 60
         self.results["resources"]["peak_gpu_mem_gb"] = get_gpu_mem_usage()
 
         # Parameter counts
@@ -60,8 +58,10 @@ class ExperimentTracker:
         self.results["resources"]["trainable_params"] = trainable_params
 
         # Save to file
-        filename = os.path.join(self.results_dir, f"{self.results['experiment_id']}.json")
-        with open(filename, 'w') as f:
+        filename = os.path.join(
+            self.results_dir, f"{self.results['experiment_id']}.json"
+        )
+        with open(filename, "w") as f:
             json.dump(self.results, f, indent=2)
 
         return self.results

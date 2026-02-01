@@ -62,27 +62,25 @@ make_rank_k_target = create_rank_k_target
 # Re-export all public functions
 __all__ = [
     # Layer classes
-    'DendriticLayer',
-    'DendriticMLP',
-    'DendriticStack',
-    
+    "DendriticLayer",
+    "DendriticMLP",
+    "DendriticStack",
     # Sanity check functions
-    '_test',
-    'check_true_capacity',
-    'performance_test',
-    'test_shapes',
-    'test_gradient_flow',
-    'test_parameter_count',
-    
+    "_test",
+    "check_true_capacity",
+    "performance_test",
+    "test_shapes",
+    "test_gradient_flow",
+    "test_parameter_count",
     # Benchmark functions
-    'create_rank_k_target',
-    'make_rank_k_target',  # Backward compatibility alias
-    'run_training_benchmark',
-    'diagnostic_benchmark',
-    'evaluate_rank_scaling',
-    'test_structure_responsiveness',
-    'assess_cubic_feature_contributions',
-    'evaluate_model_generalization',
+    "create_rank_k_target",
+    "make_rank_k_target",  # Backward compatibility alias
+    "run_training_benchmark",
+    "diagnostic_benchmark",
+    "evaluate_rank_scaling",
+    "test_structure_responsiveness",
+    "assess_cubic_feature_contributions",
+    "evaluate_model_generalization",
 ]
 
 

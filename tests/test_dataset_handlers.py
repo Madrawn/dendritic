@@ -158,9 +158,9 @@ def test_wikitext_prepare_data_ungrouped(mocker):
     if pad_token_id is not None:
         pad_mask = input_ids == pad_token_id
         label_mask = labels == -100
-        assert (
-            pad_mask == label_mask
-        ).all(), "Padding tokens should be masked in labels"
+        assert (pad_mask == label_mask).all(), (
+            "Padding tokens should be masked in labels"
+        )
 
 
 @pytest.fixture

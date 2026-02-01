@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Literal, get_type_hints
 
 
 # Configuration for optional Cohort LR Scheduler
@@ -15,9 +16,6 @@ class CohortSchedulerConfig:
     apply_to_gradients: bool = (
         True  # Whether to modify gradients (default current behavior)
     )
-
-
-from typing import Literal, get_type_hints
 
 
 class AutoVivifyMixin:
@@ -80,7 +78,6 @@ class PretrainingConfig(AutoVivifyMixin):
     batch_size: int = 6
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
-    warmup_steps: int = training_steps // 20
     max_grad_norm: float = 1.0
     scheduler_type: str = "plateau"  # "cosine" or "plateau"
     eval_split_ratio: float = 0.1
@@ -117,6 +114,14 @@ class PretrainingConfig(AutoVivifyMixin):
     dendritic_stack_hidden_dim: int = 0
     param_grid: dict = field(default_factory=dict)
 
-    def __post_init__(self):
-        if self.eval_interval is None:
-            self.eval_interval = max(self.training_steps // 20, 1)
+    @property
+    def warmup_steps(self) -> int:
+        """This acts as a getter and is calculated on demand."""
+        return self.training_steps // 20
+
+    @property
+    def effective_eval_interval(self) -> int:
+        """Handle the 'dynamic default' logic without __post_init__."""
+        if self.eval_interval is not None:
+            return self.eval_interval
+        return max(self.training_steps // 20, 1)

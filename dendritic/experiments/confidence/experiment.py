@@ -123,7 +123,7 @@ class ConfidenceAwareExperiment:
         logging.info(f"Confidence model parameters: {conf_params:,}")
         logging.info(
             f"Parameter difference: {conf_params - std_params:,} "
-            f"({(conf_params - std_params)/std_params*100:.2f}%)"
+            f"({(conf_params - std_params) / std_params * 100:.2f}%)"
         )
 
         return standard_model, confidence_model

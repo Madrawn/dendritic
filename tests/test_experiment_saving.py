@@ -3,7 +3,10 @@ import numpy as np
 import pytest
 from pathlib import Path
 from dendritic.experiments.utils.ExperimentResults import ExperimentResults
-from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig, CohortSchedulerConfig
+from dendritic.experiments.utils.PretrainingConfig import (
+    PretrainingConfig,
+    CohortSchedulerConfig,
+)
 from dendritic.experiments.analysis.analysis import save_experiment_results
 
 
@@ -15,22 +18,19 @@ def test_save_experiment_results_handles_numpy_types(tmp_path):
     statistical_analysis = {
         "comparison": {
             "significant_005": np.bool_(True),
-            "significant_001": np.bool_(False)
+            "significant_001": np.bool_(False),
         }
     }
-    
+
     results = ExperimentResults(
-        model_results={
-            "baseline": [],
-            "dendritic": []
-        },
+        model_results={"baseline": [], "dendritic": []},
         statistical_analysis=statistical_analysis,
-        config=config
+        config=config,
     )
-    
+
     # This should not raise TypeError
     save_experiment_results(results, Path(tmp_path))
-    
+
     # Verify the saved file
     output_file = list(Path(tmp_path).glob("*.json"))[0]
     with open(output_file, "r") as f:
@@ -43,7 +43,9 @@ def test_save_experiment_results_handles_numpy_types(tmp_path):
 def test_save_experiment_results_with_cohort_scheduler(tmp_path):
     """Test that save_experiment_results can serialize config with CohortSchedulerConfig."""
     config = PretrainingConfig(
-        cohort_scheduler=CohortSchedulerConfig(min_mult=0.3, max_mult=1.0, sharpness=2.0)
+        cohort_scheduler=CohortSchedulerConfig(
+            min_mult=0.3, max_mult=1.0, sharpness=2.0
+        )
     )
     statistical_analysis = {
         "baseline": {
@@ -56,7 +58,7 @@ def test_save_experiment_results_with_cohort_scheduler(tmp_path):
             "baseline": [],
         },
         statistical_analysis=statistical_analysis,
-        config=config
+        config=config,
     )
     # This should not raise TypeError
     save_experiment_results(results, Path(tmp_path))

@@ -161,8 +161,6 @@ def test_enhancement_fixed(simple_mlp):
 
 
 @pytest.mark.unit
-
-
 @pytest.mark.unit
 def test_selective_layer_enhancement(simple_mlp):
     """Test selective layer enhancement"""

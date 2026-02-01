@@ -63,9 +63,10 @@ def test_pretraining_experiment_end_to_end():
     # ------------------------------------------------------------------
     experiment = PretrainingExperiment(config)
     # Create models and define variants (baseline and baseline_wave with AdamW)
-    baseline_model, baseline_wave_model = experiment._build_model(
-        "standard", dropout=0.0
-    ), experiment._build_model("standard", dropout=0.0)
+    baseline_model, baseline_wave_model = (
+        experiment._build_model("standard", dropout=0.0),
+        experiment._build_model("standard", dropout=0.0),
+    )
     from dendritic.experiments.utils.experiment_pretraining import ModelVariant
 
     model_variants = [
@@ -98,7 +99,8 @@ def test_pretraining_experiment_end_to_end():
     # ------------------------------------------------------------------
     # Basic sanity checks on the returned ExperimentResults object
     # ------------------------------------------------------------------
-    # The experiment creates two model variants (baseline and baseline_wave) with AdamW optimizer.
+    # The experiment creates two model variants
+    # (baseline and baseline_wave) with AdamW optimizer.
     expected_models = {
         "baseline",
         "baseline_wave",

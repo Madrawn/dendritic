@@ -22,3 +22,14 @@ timeout = 30
 timeout_method = "thread"
 timeout_func_only = true
 
+[tool.ruff.lint]
+# Enable Pylint (PL) and McCabe complexity (C90) rules
+select = ["E", "F", "PLR", "C90"]
+
+[tool.ruff.lint.pylint]
+# The standard way to limit function length in Ruff (by statement count)
+max-statements = 50  # Adjust this number to your preference
+
+[tool.ruff.lint.mccabe]
+# Limits how complex a function can be (nesting, loops, etc.)
+max-complexity = 10

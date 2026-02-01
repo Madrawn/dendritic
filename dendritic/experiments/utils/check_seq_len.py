@@ -33,7 +33,7 @@ def run(dataset_name: str, max_samples: int):
         seq_len = len(tokenized["input_ids"][0])
         lengths.append(seq_len)
         if i % 100 == 0:
-            print(f"Processed {i+1} samples...", file=sys.stderr)
+            print(f"Processed {i + 1} samples...", file=sys.stderr)
 
         if len(lengths) >= max_samples:
             break

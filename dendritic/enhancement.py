@@ -281,19 +281,19 @@ def _log_conversion_statistics(conversions: list[LayerConversionStats]) -> None:
         )
 
     # Print summary
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("Dendritic Enhancement Summary")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"Converted {len(conversions)} layer(s)")
     print(f"Parameters before:  {total_before:>12,}")
     print(f"Parameters after:   {total_after:>12,}")
     print(
         f"Added parameters:   {total_after - total_before:>12,} "
-        f"(+{(total_after/total_before-1)*100:.2f}%)"
+        f"(+{(total_after / total_before - 1) * 100:.2f}%)"
     )
     print(
         f"Trainable params:   {total_trainable:>12,} "
-        f"({total_trainable/total_after*100:.2f}% of enhanced layers)"
+        f"({total_trainable / total_after * 100:.2f}% of enhanced layers)"
     )
 
 
@@ -434,9 +434,9 @@ def enhance_model_with_dendritic(
     # Ensure only dendritic parameters (and not base model params) are trainable
     for name, p in model.named_parameters():
         if p.requires_grad:
-            assert (
-                id(p) in dendritic_param_ids
-            ), f"Unexpected trainable param outside dendritic: {name}"
+            assert id(p) in dendritic_param_ids, (
+                f"Unexpected trainable param outside dendritic: {name}"
+            )
 
     return model
 

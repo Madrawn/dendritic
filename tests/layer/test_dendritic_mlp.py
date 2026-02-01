@@ -4,14 +4,20 @@ from dendritic.layers.DendriticMLP import DendriticMLP
 import pytest
 import torch
 import torch.nn as nn
+
+
 # Fixtures for common test configurations
 @pytest.fixture(params=[(64, 32, 8), (128, 64, 16), (256, 128, 32)])
 def layer_config(request):
     input_dim, output_dim, poly_rank = request.param
     return input_dim, output_dim, poly_rank
+
+
 @pytest.fixture
 def dendritic_mlp():
     return DendriticMLP(256, 1024, poly_rank=16)
+
+
 # ===================
 # DendriticMLP Tests
 # ===================

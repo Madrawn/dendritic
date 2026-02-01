@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 @dataclass
 class TrainingResult:
     """Results from a single training run."""
+
     model_type: str
     seed: int
     final_train_loss: float

@@ -8,7 +8,6 @@ where we need tokens at positions t, t+1, and t+2.
 from typing import Dict, Any, Tuple, Optional
 import torch
 from torch.utils.data import DataLoader, Dataset
-from datasets import Dataset as HFDataset
 from transformers.tokenization_utils import PreTrainedTokenizer
 
 from dendritic.dataset_handlers.factory import get_handler
@@ -44,7 +43,8 @@ class ConfidenceDataset(Dataset):
         input_ids = self.sequences[idx]  # Shape: (seq_len + 2,)
         # Extract the three sequences
         tokens_t = input_ids[: self.seq_len]
-        # For lookahead training, we need single tokens at positions seq_len and seq_len+1
+        # For lookahead training, we need single tokens
+        # at positions seq_len and seq_len+1
         tokens_t_plus_1 = input_ids[self.seq_len]  # Single token
         tokens_t_plus_2 = input_ids[self.seq_len + 1]  # Single token
 
@@ -103,7 +103,8 @@ def prepare_confidence_data(
     # We'll use a modified config with increased sequence length
     modified_config = _create_modified_config(config)
 
-    # Get standard dataloaders, passing dataset_kwargs to prepare_pretraining_dataloaders
+    # Get standard dataloaders, passing dataset_kwargs
+    # to prepare_pretraining_dataloaders
     standard_loaders = handler.prepare_pretraining_dataloaders(
         config=modified_config, num_workers=num_workers, kwargs=dataset_kwargs
     )
@@ -145,7 +146,6 @@ def _create_modified_config(config: ConfidenceExperimentConfig) -> PretrainingCo
         batch_size=config.batch_size,
         learning_rate=config.learning_rate,
         weight_decay=config.weight_decay,
-        warmup_steps=config.warmup_steps,
         max_grad_norm=config.max_grad_norm,
         scheduler_type=config.scheduler_type,
         eval_split_ratio=config.eval_split_ratio,

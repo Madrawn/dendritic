@@ -1,5 +1,6 @@
 # dendritic/experiments/visualization.py
 """Visualization utilities for experiment results."""
+
 import json
 import glob
 import os
@@ -341,14 +342,18 @@ def save_markdown_table(result_path: str, md_path: str, points: int = 10):
 
     # Format as markdown table
     # Determine column widths
-    col_widths = [max(len(str(row[i])) for row in rows + [headers]) for i in range(len(headers))]
+    col_widths = [
+        max(len(str(row[i])) for row in rows + [headers]) for i in range(len(headers))
+    ]
 
     # Create header separator
     sep = ["-" * w for w in col_widths]
 
     # Build lines
     lines = []
-    lines.append("| " + " | ".join(h.ljust(w) for h, w in zip(headers, col_widths)) + " |")
+    lines.append(
+        "| " + " | ".join(h.ljust(w) for h, w in zip(headers, col_widths)) + " |"
+    )
     lines.append("| " + " | ".join(s.ljust(w) for s, w in zip(sep, col_widths)) + " |")
     for row in rows:
         cells = []
@@ -391,13 +396,11 @@ def get_newest_file(path: str, pattern: str) -> str | None:
 
 
 if __name__ == "__main__":
-    pretraining_experiment_results_path = (
-        get_newest_file(r"E:/Users/yasok/source/repos/dendritic/results", "*.json")
+    pretraining_experiment_results_path = get_newest_file(
+        r"E:/Users/yasok/source/repos/dendritic/results", "*.json"
     )
     assert pretraining_experiment_results_path is not None
-    print(
-        f"Visualizing pretraining results from {pretraining_experiment_results_path}"
-    )
+    print(f"Visualizing pretraining results from {pretraining_experiment_results_path}")
     plot_training_curves(
         pretraining_experiment_results_path,
         show=True,

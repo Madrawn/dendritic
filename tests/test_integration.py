@@ -6,7 +6,12 @@ import gc  # Added for explicit garbage collection
 from transformers.models.gpt2 import GPT2LMHeadModel, GPT2Tokenizer
 from transformers.models.bert import BertForMaskedLM, BertTokenizer
 from transformers.models.roberta import RobertaForMaskedLM, RobertaTokenizer
-from dendritic.enhancement import enhance_model_with_dendritic, get_polynomial_stats, load_dendritic_model, save_dendritic_model
+from dendritic.enhancement import (
+    enhance_model_with_dendritic,
+    get_polynomial_stats,
+    load_dendritic_model,
+    save_dendritic_model,
+)
 from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
 from dendritic.layers.DendriticLayer import DendriticLayer
 from dendritic.layers.DendriticStack import DendriticStack
@@ -60,10 +65,15 @@ def create_dataloader(dataset, tokenizer, batch_size=2, max_length=128):
     """Create a dataloader from a dataset"""
     handler = PythonAlpacaHandler(tokenizer=tokenizer, max_length=max_length)
     tokenized = dataset.map(
-        handler.tokenize_function, batched=True, remove_columns=dataset.column_names, load_from_cache_file=False
+        handler.tokenize_function,
+        batched=True,
+        remove_columns=dataset.column_names,
+        load_from_cache_file=False,
     )
     # Set format to PyTorch tensors
-    tokenized.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+    tokenized.set_format(
+        type="torch", columns=["input_ids", "attention_mask", "labels"]
+    )
     return DataLoader(tokenized, batch_size=batch_size, shuffle=True)
 
 
@@ -112,7 +122,11 @@ def test_model_enhancement_workflow(request, model_fixture, model_name, small_da
     # Test forward pass
     batch = next(iter(dataloader))
     # Convert to long tensor for models like BERT that require integer inputs
-    inputs = batch["input_ids"].long() if "bert" in model_name.lower() else batch["input_ids"]
+    inputs = (
+        batch["input_ids"].long()
+        if "bert" in model_name.lower()
+        else batch["input_ids"]
+    )
     outputs = enhanced_model(inputs)
     assert outputs.logits.shape[0] == inputs.shape[0]
 
@@ -207,9 +221,11 @@ def test_training_workflow(gpt2_model_and_tokenizer, small_dataset):
 
     # Capture initial parameters for diagnostics
     initial_params = {
-        n: p.data.clone() for n, p in enhanced_model.named_parameters() if p.requires_grad
+        n: p.data.clone()
+        for n, p in enhanced_model.named_parameters()
+        if p.requires_grad
     }
-    
+
     # Training loop with diagnostics
     enhanced_model.train()
     prev_loss = float("inf")
@@ -222,7 +238,7 @@ def test_training_workflow(gpt2_model_and_tokenizer, small_dataset):
         outputs = enhanced_model(inputs, labels=inputs)
         loss = outputs.loss
         loss.backward()
-        
+
         # Diagnostic: Check gradients for dendritic parameters
         print("\nGradient diagnostics:")
         for name, param in enhanced_model.named_parameters():
@@ -236,7 +252,7 @@ def test_training_workflow(gpt2_model_and_tokenizer, small_dataset):
                 print(f"  {name}: grad_exists={grad_exists}, grad_norm={grad_norm:.6f}")
 
         optimizer.step()
-        
+
         # Diagnostic: Check if parameters changed from initial state
         print("\nParameter change diagnostics:")
         for name, param in enhanced_model.named_parameters():
@@ -252,8 +268,9 @@ def test_training_workflow(gpt2_model_and_tokenizer, small_dataset):
     enhanced_model.eval()
     for name, param in enhanced_model.named_parameters():
         if param.requires_grad:
-            assert not torch.equal(initial_params[name], param.data), \
-                   f"Parameter {name} did not change during training"
+            assert not torch.equal(initial_params[name], param.data), (
+                f"Parameter {name} did not change during training"
+            )
 
 
 # =====================
@@ -350,6 +367,7 @@ def test_training_performance(gpt2_model_and_tokenizer, small_dataset):
     # Verify performance impact is reasonable
     assert enhanced_duration < base_duration * 1.5  # Less than 50% slowdown
 
+
 @pytest.mark.timeout(300)
 @pytest.mark.integration
 def test_scaling_with_model_size():
@@ -391,6 +409,7 @@ def test_scaling_with_model_size():
             assert current > prev  # Larger models should use more memory
             prev = current
 
+
 @pytest.mark.skip(reason="Flaky test, needs investigation")
 @pytest.mark.integration
 def test_batch_size_handling(gpt2_model_and_tokenizer):
@@ -406,7 +425,6 @@ def test_batch_size_handling(gpt2_model_and_tokenizer):
     enhanced_model(torch.randint(0, tokenizer.vocab_size, (1, 128)))
     for bs in batch_sizes:
         try:
-
             # Force garbage collection to free any unused memory
             gc.collect()
 
@@ -449,7 +467,9 @@ def test_batch_size_handling(gpt2_model_and_tokenizer):
         # Check that memory doesn't grow faster than O(batch_size^2) - very relaxed bound
         max_ratio = mem_values[-1] / max(mem_values[0], 0.1)  # Avoid division by zero
         batch_ratio = batch_sizes[-1] / batch_sizes[0]
-        assert max_ratio < batch_ratio ** 2, f"Memory growth {max_ratio:.1f}x exceeds quadratic bound"
+        assert max_ratio < batch_ratio**2, (
+            f"Memory growth {max_ratio:.1f}x exceeds quadratic bound"
+        )
 
 
 # =====================
@@ -513,22 +533,25 @@ def test_inference_with_enhanced_model(gpt2_model_and_tokenizer):
     assert len(generated) > len(input_text)
     assert "hello_world" in generated
 
-@pytest.mark.skip(reason="Fails if run in parallel with other tests, needs investigation")
+
+@pytest.mark.skip(
+    reason="Fails if run in parallel with other tests, needs investigation"
+)
 @pytest.mark.integration
 def test_model_serialization_workflow(gpt2_model_and_tokenizer):
     """Test the full save/load workflow with auto-configuration."""
     base_model, _ = gpt2_model_and_tokenizer
-    
+
     # 1. Configuration
     enhancement_params = {
         "target_layers": ["mlp.c_fc"],
         "poly_rank": 8,
-        "freeze_linear": True
+        "freeze_linear": True,
     }
 
     # 2. Enhance (and pretend training happens)
     enhanced_model = enhance_model_with_dendritic(base_model, **enhancement_params)
-    
+
     # 3. Save
     # No need to pass params! The model knows them.
     save_path = "temp_dendritic_model.pt"
@@ -538,7 +561,7 @@ def test_model_serialization_workflow(gpt2_model_and_tokenizer):
         # 4. Load
         # We start with a fresh base model
         fresh_base = GPT2LMHeadModel.from_pretrained("gpt2")
-        
+
         # Load handles re-enhancement and weight loading
         restored_model = load_dendritic_model(fresh_base, save_path)
 
@@ -546,14 +569,14 @@ def test_model_serialization_workflow(gpt2_model_and_tokenizer):
         # Check config
         for key, value in enhancement_params.items():
             assert restored_model.dendritic_config[key] == value  # type: ignore
-        
+
         # Check weights
         for (n1, p1), (n2, p2) in zip(
             enhanced_model.named_parameters(), restored_model.named_parameters()
         ):
             if p1.requires_grad:
-                assert torch.equal(p1, p2) # exact match for loaded weights
-                
+                assert torch.equal(p1, p2)  # exact match for loaded weights
+
     finally:
         if os.path.exists(save_path):
             os.remove(save_path)

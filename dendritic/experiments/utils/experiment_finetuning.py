@@ -429,7 +429,7 @@ def train_finetuning_run(
             )
 
             logging.info(
-                f"{method} seed={seed} step={step+1}: "
+                f"{method} seed={seed} step={step + 1}: "
                 f"eval_loss={eval_loss:.4f}, ppl={perplexity:.2f}"
             )
 

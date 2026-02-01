@@ -1,19 +1,18 @@
-import sys
-import os
 import builtins
 import logging
+import os
 
 import pytest
 import torch
 from torch.utils.data import DataLoader
 from transformers.models.gpt2 import GPT2Tokenizer
 
-from dendritic.experiments.utils import (
-    setup_logging,
-    debug_dataset_integrity,
-)
 from dendritic.experiments.run_experiments import (
     load_finetuning_data,
+)
+from dendritic.experiments.utils import (
+    debug_dataset_integrity,
+    setup_logging,
 )
 
 
@@ -79,14 +78,16 @@ def test_load_finetuning_data_fallback(monkeypatch):
 @pytest.mark.unit
 def test_debug_dataset_integrity_logs(caplog):
     """Run the debug helper on a tiny synthetic dataset and verify logging output."""
-    from torch.utils.data import TensorDataset
 
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
 
     # Synthetic data
     input_ids = torch.tensor(
-        [[1, 2, 3, tokenizer.pad_token_id], [4, 5, 6, tokenizer.pad_token_id]]
+        [
+            [1, 2, 3, tokenizer.pad_token_id],
+            [4, 5, 6, tokenizer.pad_token_id],
+        ]
     )
     attention_mask = torch.tensor([[1, 1, 1, 0], [1, 1, 1, 0]])
     labels = torch.tensor([[1, 2, 3, -100], [4, 5, 6, -100]])

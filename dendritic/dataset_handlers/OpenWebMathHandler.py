@@ -10,10 +10,10 @@ from dendritic.dataset_handlers.TextCorpusHandler import TextCorpusHandler
 
 class OpenWebMathHandler(TextCorpusHandler):
     """Handler for OpenWebMath dataset (open-web-math/open-web-math)."""
-    
+
     dataset_name = "open-web-math/open-web-math"
     text_column = "text"
-    
+
     def __init__(
         self,
         tokenizer: PreTrainedTokenizer,

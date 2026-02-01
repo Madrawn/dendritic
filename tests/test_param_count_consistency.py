@@ -25,9 +25,9 @@ def test_dendritic_param_count_matches_calculation(device):
     print(
         f"Dendritic - Expected: {expected}, Actual: {actual}, Rel diff: {rel_diff:.4f}"
     )
-    assert (
-        rel_diff < tolerance
-    ), f"Trainable param count mismatch: expected {expected}, got {actual}"
+    assert rel_diff < tolerance, (
+        f"Trainable param count mismatch: expected {expected}, got {actual}"
+    )
 
 
 @pytest.mark.skipif(not PEFT_AVAILABLE, reason="peft not installed")
@@ -86,6 +86,6 @@ def test_lora_param_count_matches_calculation(device):
     expected = lora_rank * total_dim_sum + alpha_params
     tolerance = 0.01
     print(f"\nLoRA - Expected: {expected}, Actual: {actual}")
-    assert (
-        abs(actual - expected) / max(actual, expected) < tolerance
-    ), f"LoRA trainable param count mismatch: expected {expected}, got {actual}"
+    assert abs(actual - expected) / max(actual, expected) < tolerance, (
+        f"LoRA trainable param count mismatch: expected {expected}, got {actual}"
+    )

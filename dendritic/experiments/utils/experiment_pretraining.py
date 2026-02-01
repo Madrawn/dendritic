@@ -405,7 +405,7 @@ class PretrainingExperiment:
                 )
 
                 logging.info(
-                    f"\n{model_type} seed={seed} step={step+1}: "
+                    f"\n{model_type} seed={seed} step={step + 1}: "
                     f"train={avg_train_loss:.4f}, avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
                 )
 
@@ -578,7 +578,9 @@ def train_config_with_models(
     train_dl = dataloaders["train"]
     eval_dl = dataloaders["eval"]
 
-    model = experiment._build_model(mlp_type=experiment.config.layer_type, dropout=experiment.config.dropout)  # type: ignore
+    model = experiment._build_model(
+        mlp_type=experiment.config.layer_type, dropout=experiment.config.dropout
+    )  # type: ignore
     model_variant = ModelVariant(
         name=config.layer_type,
         model=model,
