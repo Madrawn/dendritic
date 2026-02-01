@@ -10,6 +10,8 @@ import torch.nn as nn
 from abc import ABC, abstractmethod
 from typing import Any
 
+from experiments.models.MiniGPT import ConfidenceAwareGPT
+
 
 class TrainingStrategy(ABC):
     """Abstract base class for training strategies."""
@@ -19,7 +21,11 @@ class TrainingStrategy(ABC):
 
     @abstractmethod
     def training_step(
-        self, model: nn.Module, batch: tuple[torch.Tensor, ...], device: str, **kwargs
+        self,
+        model: nn.Module | ConfidenceAwareGPT,
+        batch: tuple[torch.Tensor, ...],
+        device: str,
+        **kwargs,
     ) -> dict[str, torch.Tensor]:
         """
         Perform a single training step.

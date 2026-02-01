@@ -1,3 +1,4 @@
+from unittest import result
 from dendritic.experiments.confidence.TrainingStrategy import TrainingStrategy
 from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
 from dendritic.experiments.confidence.results import ConfidenceTrainingResult
@@ -20,56 +21,15 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
         self.prev_conf = None
 
     def training_step(
-        self, model: nn.Module, batch: tuple[torch.Tensor, ...], device: str, **kwargs
-    ) -> dict[str, torch.Tensor]:
-        """
-        Perform two-pass training step for confidence model.
-
-        Args:
-            model: ConfidenceAwareGPT model
-            batch: Tuple of (tokens_t, tokens_t_plus_1, tokens_t_plus_2)
-            device: Device to run on
-            **kwargs: May include 'prev_conf' for confidence tracking
-
-        Returns:
-            Dictionary with loss metrics
-        """
-        tokens_t, tokens_t_plus_1, tokens_t_plus_2 = batch
-
-        # Get or initialize previous confidence
-        prev_conf = kwargs.get("prev_conf", self.prev_conf)
-        if prev_conf is None:
-            batch_size = tokens_t.shape[0]
-            seq_len = tokens_t.shape[1]
-            # Get dtype from model's token embedding
-            if hasattr(model, "tok_emb") and hasattr(model.tok_emb, "weight"):
-                dtype = model.tok_emb.weight.dtype  # type: ignore
-            else:
-                dtype = torch.float32
-            prev_conf = torch.zeros(
-                (batch_size, seq_len, 1), device=device, dtype=dtype
-            )
-
-        # Two-pass training step
-        # Cast model to ConfidenceAwareGPT for type checking
-        confidence_model = model  # type: ConfidenceAwareGPT
-        result = ConfidenceAwareGPT.two_pass_training_step(
-            model=confidence_model,
-            prev_conf=prev_conf,
+        self, model: ConfidenceAwareGPT | nn.Module, batch, device, **kwargs
+    ):
+        tokens_t, tokens_t_plus_1, _ = batch
+        assert isinstance(model, ConfidenceAwareGPT)
+        result = model.two_pass_training_step(
+            model=model,
             tokens_t=tokens_t,
             tokens_t_plus_1=tokens_t_plus_1,
-            tokens_t_plus_2=tokens_t_plus_2,
             alpha=self.config.confidence_alpha,
-        )
-
-        # Update confidence for next step
-        pred_conf = result["pred_conf_t"].detach()
-        self.prev_conf = torch.cat(
-            [
-                prev_conf[:, 1:, :],  # Shift left
-                pred_conf.view(-1, 1, 1),  # Add new prediction
-            ],
-            dim=1,
         )
 
         return result

@@ -1,5 +1,5 @@
 from typing import Literal
-from .MetaAwareBlock import MetaAwareBlock
+from .MetaAwareBlock import DirectetaAwareBlock as MetaAwareBlock
 from .BaselineMLP import BaselineMLP
 from .DendriticPretrainingMLP import DendriticPretrainingMLP
 from .DendriticStackPretrainingMLP import DendriticStackPretrainingMLP
@@ -232,80 +232,56 @@ class ConfidenceAwareGPT(MiniGPT):
         return x
 
     @staticmethod
-    def two_pass_training_step(
-        model, prev_conf, tokens_t, tokens_t_plus_1, tokens_t_plus_2, alpha=1.0
-    ):
-        """
-        Performs the Lookahead training step.
+    def two_pass_training_step(model, tokens_t, tokens_t_plus_1, alpha=1.0):
+        B, SeqLen = tokens_t.shape
 
-        Assumption:
-        - tokens_t: The input sequence up to time t [B, SeqLen]
-        - tokens_t_plus_1: The target for the LM (next token) [B] (scalar integers)
-        - tokens_t_plus_2: The target for the future (t+2) [B]
-
-        Note: This function calculates loss for the LAST token in the sequence.
-        """
-
-        # --- Pass 1: Standard LM Training (The "Present") ---
-        # We calculate the loss for the CURRENT token prediction
-
-        outputs_1 = model(tokens_t, confidence_scalars=prev_conf)
-        logits_t = outputs_1["logits"]  # [B, SeqLen, Vocab]
-        pred_conf_t = outputs_1["confidence_pred"]  # [B, SeqLen]
-
-        # We only care about the prediction at the last step of the sequence
-        last_logit = logits_t[:, -1, :]
-        last_conf_pred = pred_conf_t[:, -1]  # Scalar prediction for the future
-
-        # Standard Cross Entropy for the next token
-        loss_lm = F.cross_entropy(last_logit, tokens_t_plus_1)
-
-        # --- Pass 2: Future Consequence Training (The "Lookahead") ---
+        # ===== PASS 1: Baseline (no confidence) =====
         with torch.no_grad():
-            # 1. Sample the model's actual choice (Hard sampling)
-            probs = F.softmax(last_logit, dim=-1)
-            # [B, 1]
-            predicted_token_id = torch.multinomial(probs, 1).detach()
+            outputs_1 = model(tokens_t, confidence_scalars=None)  # Defaults to zeros
+            logits_1 = outputs_1["logits"]
+            conf_pred_1 = outputs_1["confidence_pred"]
 
-            # 2. Construct the "Hypothetical" sequence
-            # Append the PREDICTED token to the input
-            # New shape: [B, SeqLen + 1]
-            hypothetical_input = torch.cat([tokens_t, predicted_token_id], dim=1)
+            # Calculate "baseline" future losses (what happens without confidence)
+            future_losses_baseline = F.cross_entropy(
+                logits_1[:, 1:].reshape(-1, logits_1.size(-1)),
+                tokens_t_plus_1[:, 1:].reshape(-1),
+                ignore_index=-100,
+                reduction="none",
+            ).view(B, SeqLen - 1)
 
-            # Prepare confidence for the next step:
-            # We must append the NEW predicted confidence to the history
-            # prev_conf: [B, SeqLen, 1]
-            # last_conf_pred (reshaped): [B, 1, 1]
-            next_step_conf = last_conf_pred.view(-1, 1, 1).detach()
-            hypothetical_conf = torch.cat([prev_conf, next_step_conf], dim=1)
+            # Prepare confidence input for pass 2 (shift)
+            conf_input = torch.cat(
+                [
+                    torch.zeros(
+                        B, 1, 1, device=tokens_t.device, dtype=conf_pred_1.dtype
+                    ),
+                    conf_pred_1[:, :-1].unsqueeze(-1),
+                ],
+                dim=1,
+            )
 
-        # 3. Run model on hypothetical sequence
-        outputs_2 = model(hypothetical_input, confidence_scalars=hypothetical_conf)
-        future_logits = outputs_2["logits"]  # [B, SeqLen+1, Vocab]
+        # ===== PASS 2: With confidence =====
+        outputs_2 = model(tokens_t, confidence_scalars=conf_input)
+        logits_2 = outputs_2["logits"]
+        conf_pred_2 = outputs_2["confidence_pred"]
 
-        # 4. Calculate what the loss WOULD be at t+2
-        # We look at the LAST token of this new sequence
-        future_logit_step = future_logits[:, -1, :]
-
-        # Measure loss against the REAL t+2 token
-        loss_future_actual = F.cross_entropy(
-            future_logit_step, tokens_t_plus_2, reduction="none"
+        # Token prediction loss (using pass 2 predictions)
+        loss_lm = F.cross_entropy(
+            logits_2[:, :-1].reshape(-1, logits_2.size(-1)),
+            tokens_t_plus_1[:, :-1].reshape(-1),
+            ignore_index=-100,
         )
 
-        # 5. Train the Confidence Head
-        # The head at time t (last_conf_pred) should have predicted this future loss
-        loss_confidence = F.mse_loss(last_conf_pred, loss_future_actual.detach())
+        # Confidence loss: predict baseline future difficulty
+        loss_confidence = F.mse_loss(
+            conf_pred_2[:, :-1], future_losses_baseline.detach()
+        )
 
-        # Total Backward
-        total_loss = loss_lm + (alpha * loss_confidence)
-
-        # Note: We return total_loss for logging, but usually you call backward() here
-        # or return it to the optimizer loop.
-        # total_loss.backward()
+        total_loss = loss_lm + alpha * loss_confidence
 
         return {
-            "pred_conf_t": last_conf_pred,
             "total_loss": total_loss,
             "loss_lm": loss_lm,
             "loss_confidence": loss_confidence,
+            "pred_conf_t": conf_pred_2[:, -1],  # For logging
         }
