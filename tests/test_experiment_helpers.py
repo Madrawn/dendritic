@@ -7,8 +7,11 @@ from pathlib import Path
 
 from dendritic.experiments.run_experiments import (
     set_random_seed,
-    debug_dataset_integrity,  # type: ignore
 )
+from dendritic.experiments.utils.experiment_utils import (
+    debug_dataset_integrity,
+)
+
 
 @pytest.mark.unit
 def test_set_random_seed_reproducibility():
@@ -27,6 +30,7 @@ def test_set_random_seed_reproducibility():
     assert np.random.rand() == np_rand
     assert torch.rand(1).item() == torch_rand
 
+
 @pytest.mark.unit
 def test_debug_dataset_integrity_logs(caplog):
     """Run the debug helper on a tiny synthetic dataset and verify logging output."""
@@ -38,11 +42,14 @@ def test_debug_dataset_integrity_logs(caplog):
     tokenizer.pad_token = tokenizer.eos_token
 
     # Synthetic dataset: two samples with input_ids and labels
-    input_ids = torch.tensor([[1, 2, 3, tokenizer.pad_token_id], [4, 5, 6, tokenizer.pad_token_id]])
+    input_ids = torch.tensor(
+        [[1, 2, 3, tokenizer.pad_token_id], [4, 5, 6, tokenizer.pad_token_id]]
+    )
     attention_mask = torch.tensor([[1, 1, 1, 0], [1, 1, 1, 0]])
     labels = torch.tensor([[1, 2, 3, -100], [4, 5, 6, -100]])
 
     dataset = TensorDataset(input_ids, attention_mask, labels)
+
     # Convert to dict format expected by debug_dataset_integrity
     class SimpleDataset(torch.utils.data.Dataset):
         def __getitem__(self, idx):

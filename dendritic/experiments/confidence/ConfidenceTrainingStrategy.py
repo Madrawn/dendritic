@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 
-from typing import Any
+from typing import Any, cast
 
 
 class ConfidenceTrainingStrategy(TrainingStrategy):
@@ -23,7 +23,7 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
         self, model: ConfidenceAwareGPT | nn.Module, batch, device, **kwargs
     ):
         tokens_t, tokens_t_plus_1, _ = batch
-        assert isinstance(model, ConfidenceAwareGPT)
+        model = cast(ConfidenceAwareGPT, model)
         result = model.two_pass_training_step(
             model=model,
             tokens_t=tokens_t,
@@ -65,7 +65,8 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
         # Forward pass with default confidence scalars (zeros)
         outputs = model(input_ids, labels=seq_labels, confidence_scalars=None)
 
-        return {"loss": outputs["loss"]}
+        # Return loss_lm for consistency with training step
+        return {"loss_lm": outputs["loss"], "loss": outputs["loss"]}
 
     def prepare_batch(
         self, batch: tuple[torch.Tensor, ...], device: str

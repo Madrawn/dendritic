@@ -43,7 +43,8 @@ class StandardTrainingStrategy(TrainingStrategy):
         # Forward pass
         outputs = model(input_ids, labels=seq_labels)
 
-        return {"loss": outputs["loss"]}
+        # Return loss_lm for consistency with evaluation logic
+        return {"loss_lm": outputs["loss"], "loss": outputs["loss"]}
 
     def evaluation_step(
         self, model: nn.Module, batch: tuple[torch.Tensor, ...], device: str, **kwargs

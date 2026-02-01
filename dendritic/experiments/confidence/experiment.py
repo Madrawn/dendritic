@@ -295,14 +295,6 @@ class ConfidenceAwareExperiment:
         for seed in self.config.seeds:
             logging.info(f"Running experiment with seed={seed}")
 
-            # Train standard model
-            logging.info(f"Training standard model (seed={seed})...")
-            standard_result = self.train_standard_model(
-                standard_model, train_loader, eval_loader, self.device, seed
-            )
-            standard_results[str(seed)] = [standard_result]
-            training_times["standard"].append(standard_result.training_time)
-
             # Train confidence model
             logging.info(f"Training confidence model (seed={seed})...")
             confidence_result = self.train_confidence_model(
@@ -310,6 +302,13 @@ class ConfidenceAwareExperiment:
             )
             confidence_results[str(seed)] = [confidence_result]
             training_times["confidence"].append(confidence_result.training_time)
+            # Train standard model
+            logging.info(f"Training standard model (seed={seed})...")
+            standard_result = self.train_standard_model(
+                standard_model, train_loader, eval_loader, self.device, seed
+            )
+            standard_results[str(seed)] = [standard_result]
+            training_times["standard"].append(standard_result.training_time)
 
             # Save intermediate results
             if self.config.save_interval > 0 and (

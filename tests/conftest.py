@@ -10,39 +10,72 @@ def setup_windows_compiler():
     if os.name != "nt":
         return
 
+    # Try multiple Visual Studio versions
+    vs_versions = ["2022", "2019", "2017"]
     vs_variants = ["Community", "Professional", "Enterprise", "BuildTools"]
-    base_path = r"C:\Program Files\Microsoft Visual Studio\2022"
 
     vcvars_path = None
-    for variant in vs_variants:
-        path = os.path.join(base_path, variant, r"VC\Auxiliary\Build\vcvars64.bat")
-        if os.path.exists(path):
-            vcvars_path = path
+    for version in vs_versions:
+        base_path = rf"C:\Program Files\Microsoft Visual Studio\{version}"
+        for variant in vs_variants:
+            path = os.path.join(base_path, variant, r"VC\Auxiliary\Build\vcvars64.bat")
+            if os.path.exists(path):
+                vcvars_path = path
+                print(f"Found vcvars at {vcvars_path}")
+                break
+        if vcvars_path:
             break
 
     if not vcvars_path:
+        print("No Visual Studio vcvars64.bat found.")
         return
 
-    # THE FIX:
-    # Instead of shell=True (which triggers the Conda AutoRun),
-    # we explicitly call cmd.exe with the /d flag (Disable AutoRun).
-    # Then we run the .bat and 'set' to capture the environment.
+    # Disable Conda AutoRun by setting environment variable
+    env = os.environ.copy()
+    env["CONDA_AUTO_RUN"] = "0"
 
-    cmd = f'cmd.exe /d /c "{vcvars_path}" && set'
+    # Try up to 3 times with a small delay
+    for attempt in range(3):
+        try:
+            # Original command that worked before
+            cmd = f'cmd.exe /d /c "{vcvars_path}" && set'
+            output = subprocess.check_output(
+                cmd, shell=False, text=True, stderr=subprocess.STDOUT, env=env
+            )
 
-    try:
-        # Note: shell=False is safer here because we are calling cmd.exe directly
-        output = subprocess.check_output(
-            cmd, shell=False, text=True, stderr=subprocess.STDOUT
-        )
+            for line in output.splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    os.environ[key] = value
+            print("Successfully loaded MSVC environment (bypassing Conda AutoRun).")
+            return
+        except subprocess.CalledProcessError as e:
+            print(f"Attempt {attempt + 1} failed: {e.output}")
+            if attempt < 2:
+                import time
 
-        for line in output.splitlines():
-            if "=" in line:
-                key, value = line.split("=", 1)
-                os.environ[key] = value
-        print("Successfully loaded MSVC environment (bypassing Conda AutoRun).")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to load MSVC: {e.output}")
+                time.sleep(1)
+            else:
+                print("Failed to load MSVC after 3 attempts.")
+                # Fallback: try to locate cl.exe manually
+                import glob
+
+                cl_path = None
+                for version in vs_versions:
+                    for variant in vs_variants:
+                        pattern = rf"C:\Program Files\Microsoft Visual Studio\{version}\{variant}\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe"
+                        matches = glob.glob(pattern)
+                        if matches:
+                            cl_path = matches[0]
+                            break
+                    if cl_path:
+                        break
+                if cl_path:
+                    cl_dir = os.path.dirname(cl_path)
+                    os.environ["PATH"] = cl_dir + ";" + os.environ.get("PATH", "")
+                    print(f"Added cl.exe directory to PATH: {cl_dir}")
+                else:
+                    print("Could not locate cl.exe.")
 
 
 setup_windows_compiler()

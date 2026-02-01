@@ -390,7 +390,7 @@ class PretrainingExperiment:
                 )
 
                 logging.info(
-                    f"{model_type} seed={seed} step={step+1}: "
+                    f"\n{model_type} seed={seed} step={step+1}: "
                     f"train={avg_train_loss:.4f}, avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
                 )
 

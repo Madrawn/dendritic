@@ -11,6 +11,8 @@ from transformers.models.gpt2 import GPT2Tokenizer
 from dendritic.experiments.run_experiments import (
     setup_logging,
     load_finetuning_data,
+)
+from dendritic.experiments.utils.experiment_utils import (
     debug_dataset_integrity,
 )
 
@@ -29,10 +31,13 @@ def test_setup_logging_creates_file_handler(tmp_path, caplog):
         # The logger should have DEBUG level
         assert logger.level == logging.DEBUG
         # There should be at least one FileHandler
-        file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+        file_handlers = [
+            h for h in logger.handlers if isinstance(h, logging.FileHandler)
+        ]
         assert file_handlers, "No FileHandler found in logger.handlers"
         # The file should exist on disk
         from pathlib import Path
+
         log_path = Path(file_handlers[0].baseFilename)
         assert log_path.exists()
     finally:

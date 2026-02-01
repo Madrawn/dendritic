@@ -269,6 +269,9 @@ class UnifiedTrainer:
         # Initialize loss tracking (ported from pretraining)
         queued_loss = None
         avg_train_loss_tensor = torch.tensor(15.0, device="cpu")
+        # Separate tracking for lm_loss and confidence_loss
+        avg_train_lm_loss_tensor = torch.tensor(15.0, device="cpu")
+        avg_train_conf_loss_tensor = torch.tensor(0.0, device="cpu")
         avg_eval_loss = 15.0
         no_improvement_count = 0
         loss = None
@@ -327,9 +330,26 @@ class UnifiedTrainer:
                 avg_train_loss_tensor * 0.9 + 0.1 * loss.detach().cpu()
             )
 
+            # Accumulate separate losses if available
+            if "loss_lm" in step_result:
+                avg_train_lm_loss_tensor = (
+                    avg_train_lm_loss_tensor * 0.9
+                    + 0.1 * step_result["loss_lm"].detach().cpu()
+                )
+            if "loss_confidence" in step_result:
+                avg_train_conf_loss_tensor = (
+                    avg_train_conf_loss_tensor * 0.9
+                    + 0.1 * step_result["loss_confidence"].detach().cpu()
+                )
+
             # Update Progress Bar (Periodic Sync) - ported from pretraining
             if step % 10 == 0:
-                current_loss_tensor = loss.detach().cpu()
+                # Use lm_loss for display if available, otherwise total loss
+                if "loss_lm" in step_result:
+                    current_loss_tensor = step_result["loss_lm"].detach().cpu()
+                else:
+                    current_loss_tensor = loss.detach().cpu()
+
                 if queued_loss is not None:
                     # This .item() will be instant
                     progress.set_postfix(
@@ -391,10 +411,22 @@ class UnifiedTrainer:
 
                 loss_history.append(history_entry)
 
-                logging.info(
-                    f"{self.model_type} seed={seed} step={step+1}: "
-                    f"train={avg_train_loss:.4f}, avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
-                )
+                # Format logging based on model type
+                if "loss_confidence" in step_result:
+                    # Confidence model: show separate losses
+                    avg_train_lm_loss = avg_train_lm_loss_tensor.item()
+                    avg_train_conf_loss = avg_train_conf_loss_tensor.item()
+                    logging.info(
+                        f"{self.model_type} seed={seed} step={step+1}: "
+                        f"train_lm={avg_train_lm_loss:.4f}, train_conf={avg_train_conf_loss:.4f}, "
+                        f"avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
+                    )
+                else:
+                    # Standard model: keep original format
+                    logging.info(
+                        f"{self.model_type} seed={seed} step={step+1}: "
+                        f"train={avg_train_loss:.4f}, avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
+                    )
 
                 # Early stopping check (ported from pretraining)
                 plateau_patience = getattr(self.config, "plateau_patience", 5)
