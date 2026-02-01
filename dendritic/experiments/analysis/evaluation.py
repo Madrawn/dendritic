@@ -3,7 +3,7 @@ import numpy as np
 
 from torch.utils.data import DataLoader
 
-from experiments.models.MiniGPT import MiniGPT
+from dendritic.experiments.models.MiniGPT import MiniGPT
 
 
 def evaluate(

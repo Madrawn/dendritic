@@ -9,3 +9,7 @@ data_cache/
 test_model_state.json
 test_model_state.pt
 .claude
+*.png
+confidence_summary_stats.json
+test_run_summary_stats.json
+.kilocode/

@@ -33,6 +33,15 @@ from dendritic.experiments.confidence.results import (
     load_results,
     create_results_filename,
 )
+from dendritic.experiments.confidence.UnifiedTrainer import (
+    UnifiedTrainer,
+)
+from dendritic.experiments.confidence.ConfidenceTrainingStrategy import (
+    ConfidenceTrainingStrategy,
+)
+from dendritic.experiments.confidence.StandardTrainingStrategy import (
+    StandardTrainingStrategy,
+)
 
 
 class ConfidenceAwareExperiment:
@@ -127,7 +136,7 @@ class ConfidenceAwareExperiment:
         seed: int,
     ) -> ConfidenceTrainingResult:
         """
-        Two-pass training loop using ConfidenceAwareGPT.two_pass_training_step.
+        Two-pass training loop using unified trainer.
 
         Args:
             model: ConfidenceAwareGPT model
@@ -139,165 +148,17 @@ class ConfidenceAwareExperiment:
         Returns:
             ConfidenceTrainingResult with training metrics
         """
-        # Set seed
-        set_random_seed(seed)
-
-        # Move model to device
-        model = model.to(device)
-
-        # Create optimizer
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=self.config.learning_rate,
-            weight_decay=self.config.weight_decay,
-        )
-
-        # Create scheduler
-        if self.config.scheduler_type == "cosine":
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=self.config.training_steps, eta_min=1e-6
-            )
-        else:
-            scheduler = None
-
-        # Training state
-        best_eval_loss = float("inf")
-        loss_history = []
-        confidence_loss_history = []
-        token_loss_history = []
-        confidence_predictions = []
-        actual_future_losses = []
-
-        # Initialize confidence as zeros
-        batch_size = self.config.batch_size
-        seq_len = self.config.max_seq_len
-        prev_conf = torch.zeros(
-            (batch_size, seq_len, 1), device=device, dtype=model.tok_emb.weight.dtype
-        )
-
-        # Training loop
-        model.train()
-        progress = tqdm(
-            range(self.config.training_steps), desc=f"Confidence model seed={seed}"
-        )
-
-        train_iter = iter(train_loader)
-
-        for step in progress:
-            try:
-                tokens_t, tokens_t_plus_1, tokens_t_plus_2 = next(train_iter)
-            except StopIteration:
-                train_iter = iter(train_loader)
-                tokens_t, tokens_t_plus_1, tokens_t_plus_2 = next(train_iter)
-
-            # Move to device
-            tokens_t = tokens_t.to(device)
-            tokens_t_plus_1 = tokens_t_plus_1.to(device)
-            tokens_t_plus_2 = tokens_t_plus_2.to(device)
-
-            # Two-pass training step
-            result = ConfidenceAwareGPT.two_pass_training_step(
-                model=model,
-                prev_conf=prev_conf,
-                tokens_t=tokens_t,
-                tokens_t_plus_1=tokens_t_plus_1,
-                tokens_t_plus_2=tokens_t_plus_2,
-                alpha=self.config.confidence_alpha,
-            )
-
-            # Backward pass
-            optimizer.zero_grad()
-            result["total_loss"].backward()
-
-            # Gradient clipping
-            if self.config.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), self.config.max_grad_norm
-                )
-
-            optimizer.step()
-            if scheduler:
-                scheduler.step()
-
-            # Update confidence for next step
-            # Use the predicted confidence from this step
-            pred_conf = result["pred_conf_t"].detach()
-            prev_conf = torch.cat(
-                [
-                    prev_conf[:, 1:, :],  # Shift left
-                    pred_conf.view(-1, 1, 1),  # Add new prediction
-                ],
-                dim=1,
-            )
-
-            # Track metrics
-            confidence_loss_history.append(result["loss_confidence"].item())
-            token_loss_history.append(result["loss_lm"].item())
-            confidence_predictions.append(pred_conf.mean().item())
-
-            # Update progress bar
-            progress.set_postfix(
-                {
-                    "loss_lm": f"{result['loss_lm'].item():.4f}",
-                    "loss_conf": f"{result['loss_confidence'].item():.4f}",
-                    "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
-                }
-            )
-
-            # Evaluation
-            eval_interval = self.config.eval_interval or 100  # Default to 100 if None
-            if (step + 1) % eval_interval == 0:
-                eval_batches = self.config.eval_batches or 10  # Default to 10 if None
-                eval_loss = self._evaluate_confidence_model(
-                    model, eval_loader, device, eval_batches
-                )
-
-                loss_history.append(
-                    {
-                        "step": step + 1,
-                        "train_loss_lm": result["loss_lm"].item(),
-                        "train_loss_conf": result["loss_confidence"].item(),
-                        "eval_loss": eval_loss,
-                        "perplexity": np.exp(eval_loss),
-                        "lr": optimizer.param_groups[0]["lr"],
-                    }
-                )
-
-                if eval_loss < best_eval_loss:
-                    best_eval_loss = eval_loss
-
-                logging.info(
-                    f"Confidence seed={seed} step={step+1}: "
-                    f"train_lm={result['loss_lm'].item():.4f}, "
-                    f"train_conf={result['loss_confidence'].item():.4f}, "
-                    f"eval={eval_loss:.4f}, ppl={np.exp(eval_loss):.2f}"
-                )
-
-        # Create result object
-        return ConfidenceTrainingResult(
-            model_type="confidence",
-            seed=seed,
-            final_train_loss=(
-                token_loss_history[-1] if token_loss_history else float("inf")
-            ),
-            final_eval_loss=best_eval_loss,
-            final_perplexity=np.exp(best_eval_loss),
-            best_eval_loss=best_eval_loss,
-            best_perplexity=np.exp(best_eval_loss),
-            loss_history=loss_history,
-            training_time=time.time() - progress.start_t,
-            config=self.config.__dict__,
-            confidence_loss_history=confidence_loss_history,
-            token_loss_history=token_loss_history,
-            confidence_predictions=confidence_predictions,
-            actual_future_losses=actual_future_losses,
-        )
+        strategy = ConfidenceTrainingStrategy(self.config)
+        trainer = UnifiedTrainer(self.config, strategy, "confidence")
+        result = trainer.train(model, train_loader, eval_loader, seed)
+        # Type cast since ConfidenceTrainingStrategy returns ConfidenceTrainingResult
+        return result  # type: ignore
 
     def train_standard_model(
         self, model: MiniGPT, train_loader, eval_loader, device: str, seed: int
     ) -> TrainingResult:
         """
-        Standard training loop reusing existing PretrainingExperiment logic.
+        Standard training loop using unified trainer.
 
         Args:
             model: Standard MiniGPT model
@@ -309,133 +170,11 @@ class ConfidenceAwareExperiment:
         Returns:
             TrainingResult with training metrics
         """
-        # Since standard training expects (input_ids, labels) format,
-        # we need to adapt the confidence data loader output
-        # For standard training, we use tokens_t as input and tokens_t_plus_1 as labels
-
-        # Set seed
-        set_random_seed(seed)
-
-        # Move model to device
-        model = model.to(device)
-
-        # Create optimizer
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=self.config.learning_rate,
-            weight_decay=self.config.weight_decay,
-        )
-
-        # Create scheduler
-        if self.config.scheduler_type == "cosine":
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=self.config.training_steps, eta_min=1e-6
-            )
-        else:
-            scheduler = None
-
-        # Training state
-        best_eval_loss = float("inf")
-        loss_history = []
-        current_loss = None
-
-        # Training loop
-        model.train()
-        progress = tqdm(
-            range(self.config.training_steps), desc=f"Standard model seed={seed}"
-        )
-
-        train_iter = iter(train_loader)
-
-        for step in progress:
-            try:
-                tokens_t, tokens_t_plus_1, _ = next(train_iter)
-            except StopIteration:
-                train_iter = iter(train_loader)
-                tokens_t, tokens_t_plus_1, _ = next(train_iter)
-
-            # Move to device
-            input_ids = tokens_t.to(device)
-            # For standard model, we need sequence labels (shifted by 1)
-            # tokens_t has shape [batch_size, seq_len]
-            # tokens_t_plus_1 has shape [batch_size] (single token at position seq_len)
-            # Create sequence labels: tokens_t[:, 1:] concatenated with tokens_t_plus_1
-            seq_labels = torch.cat(
-                [tokens_t[:, 1:].to(device), tokens_t_plus_1.unsqueeze(1).to(device)],
-                dim=1,
-            )  # shape [batch_size, seq_len]
-
-            # Forward pass
-            outputs = model(input_ids, labels=seq_labels)
-            current_loss = outputs["loss"]
-
-            # Backward pass
-            optimizer.zero_grad()
-            current_loss.backward()
-
-            # Gradient clipping
-            if self.config.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), self.config.max_grad_norm
-                )
-
-            optimizer.step()
-            if scheduler:
-                scheduler.step()
-
-            # Update progress bar
-            progress.set_postfix(
-                {
-                    "loss": f"{current_loss.item():.4f}",
-                    "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
-                }
-            )
-
-            # Evaluation
-            eval_interval = self.config.eval_interval or 100  # Default to 100 if None
-            if (step + 1) % eval_interval == 0:
-                eval_batches = self.config.eval_batches or 10  # Default to 10 if None
-                eval_loss = self._evaluate_standard_model(
-                    model, eval_loader, device, eval_batches
-                )
-
-                loss_history.append(
-                    {
-                        "step": step + 1,
-                        "train_loss": current_loss.item(),
-                        "eval_loss": eval_loss,
-                        "perplexity": np.exp(eval_loss),
-                        "lr": optimizer.param_groups[0]["lr"],
-                    }
-                )
-
-                if eval_loss < best_eval_loss:
-                    best_eval_loss = eval_loss
-
-                logging.info(
-                    f"Standard seed={seed} step={step+1}: "
-                    f"train={current_loss.item():.4f}, eval={eval_loss:.4f}, "
-                    f"ppl={np.exp(eval_loss):.2f}"
-                )
-
-        # Create result object
-        final_loss_value = (
-            current_loss.item()
-            if current_loss and hasattr(current_loss, "item")
-            else float("inf")
-        )
-        return TrainingResult(
-            model_type="standard",
-            seed=seed,
-            final_train_loss=final_loss_value,
-            final_eval_loss=best_eval_loss,
-            final_perplexity=np.exp(best_eval_loss),
-            best_eval_loss=best_eval_loss,
-            best_perplexity=np.exp(best_eval_loss),
-            loss_history=loss_history,
-            training_time=time.time() - progress.start_t,
-            config=self.config.__dict__,
-        )
+        strategy = StandardTrainingStrategy(self.config)
+        trainer = UnifiedTrainer(self.config, strategy, "standard")
+        result = trainer.train(model, train_loader, eval_loader, seed)
+        # Type cast since StandardTrainingStrategy returns TrainingResult
+        return result  # type: ignore
 
     def _evaluate_confidence_model(
         self, model: ConfidenceAwareGPT, eval_loader, device: str, num_batches: int
@@ -495,9 +234,19 @@ class ConfidenceAwareExperiment:
                     break
 
                 input_ids = tokens_t.to(device)
-                labels = tokens_t_plus_1.to(device)
+                # For standard model, we need sequence labels (shifted by 1)
+                # tokens_t has shape [batch_size, seq_len]
+                # tokens_t_plus_1 has shape [batch_size] (single token at position seq_len)
+                # Create sequence labels: tokens_t[:, 1:] concatenated with tokens_t_plus_1
+                seq_labels = torch.cat(
+                    [
+                        tokens_t[:, 1:].to(device),
+                        tokens_t_plus_1.unsqueeze(1).to(device),
+                    ],
+                    dim=1,
+                )  # shape [batch_size, seq_len]
 
-                outputs = model(input_ids, labels=labels)
+                outputs = model(input_ids, labels=seq_labels)
                 total_loss += outputs["loss"].item()
                 total_batches += 1
 

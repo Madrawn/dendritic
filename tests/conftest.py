@@ -2,11 +2,57 @@ import pytest
 import sys
 import os
 import logging
+import os
+import subprocess
+
+
+def setup_windows_compiler():
+    if os.name != "nt":
+        return
+
+    vs_variants = ["Community", "Professional", "Enterprise", "BuildTools"]
+    base_path = r"C:\Program Files\Microsoft Visual Studio\2022"
+
+    vcvars_path = None
+    for variant in vs_variants:
+        path = os.path.join(base_path, variant, r"VC\Auxiliary\Build\vcvars64.bat")
+        if os.path.exists(path):
+            vcvars_path = path
+            break
+
+    if not vcvars_path:
+        return
+
+    # THE FIX:
+    # Instead of shell=True (which triggers the Conda AutoRun),
+    # we explicitly call cmd.exe with the /d flag (Disable AutoRun).
+    # Then we run the .bat and 'set' to capture the environment.
+
+    cmd = f'cmd.exe /d /c "{vcvars_path}" && set'
+
+    try:
+        # Note: shell=False is safer here because we are calling cmd.exe directly
+        output = subprocess.check_output(
+            cmd, shell=False, text=True, stderr=subprocess.STDOUT
+        )
+
+        for line in output.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                os.environ[key] = value
+        print("Successfully loaded MSVC environment (bypassing Conda AutoRun).")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to load MSVC: {e.output}")
+
+
+setup_windows_compiler()
+import torch
 
 # Add root directory to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+
 
 # 1. NEW: Add a command line option to enable slow tests
 def pytest_addoption(parser):
@@ -16,6 +62,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--benchmark", action="store_true", default=False, help="run benchmark tests"
     )
+
 
 # Register markers
 def pytest_configure(config):
@@ -32,7 +79,7 @@ def pytest_collection_modifyitems(config, items):
     1. Skips slow tests if --runslow is not provided.
     2. Fails the test run if any test is missing a marker.
     """
-    
+
     # --- 3. NEW: Logic to skip slow tests ---
     if not config.getoption("--runslow"):
         skip_slow = pytest.mark.skip(reason="need --runslow option to run")
@@ -47,12 +94,14 @@ def pytest_collection_modifyitems(config, items):
 
     # --- EXISTING: Logic to check for missing markers ---
     unmarked_tests = []
-    
+
     for item in items:
         # Check if the test item has any own markers
         if not item.own_markers:
             unmarked_tests.append(item.nodeid)
-            
+
     if unmarked_tests:
-        msg = "The following tests are missing pytest markers:\n" + "\n".join(unmarked_tests)
+        msg = "The following tests are missing pytest markers:\n" + "\n".join(
+            unmarked_tests
+        )
         pytest.exit(msg)

@@ -3,18 +3,7 @@ from typing import Dict, Any, List
 from .BaseDatasetHandler import BaseDatasetHandler
 from .WikiTextHandler import WikiTextHandler
 from .OpenWebMathHandler import OpenWebMathHandler
-
-
-class TinyStoriesHandler(BaseDatasetHandler):
-    """Handler for the TinyStories dataset (stub implementation)."""
-
-    def load_data(self, **kwargs) -> Dict[str, Any]:
-        """Load TinyStories dataset."""
-        raise NotImplementedError("TinyStoriesHandler not yet implemented")
-
-    def tokenize_function(self, examples: Dict[str, Any]) -> Dict[str, Any]:
-        """Tokenize TinyStories examples."""
-        raise NotImplementedError("TinyStoriesHandler not yet implemented")
+from .TinyStoriesHandler import TinyStoriesHandler
 
 
 class GitHubCodeHandler(BaseDatasetHandler):

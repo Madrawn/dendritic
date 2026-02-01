@@ -46,8 +46,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 4. **Dataset Handlers** (`dendritic/dataset_handlers/`): Factory pattern for dataset loading
    - `BaseDatasetHandler`: Abstract base class
-   - `TextCorpusHandler`: For text datasets (WikiText, OpenWebMath, etc.)
+   - `TextCorpusHandler`: For text datasets (WikiText, OpenWebMath, TinyStories, etc.)
    - `PythonAlpacaHandler`: For instruction datasets with prompt formatting
+   - `TinyStoriesHandler`: For the TinyStories dataset (simple children's stories)
    - Mandatory `max_samples` parameter (no unbounded downloads)
    - Default `streaming=True` for large datasets
 

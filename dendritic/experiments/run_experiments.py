@@ -12,28 +12,63 @@ Usage:
 # Standard library imports
 import argparse
 import logging
-import multiprocessing
 import os
-from datetime import datetime
 from pathlib import Path
-import random
-from typing import Any
-import numpy as np
 
-# Third‑party imports
+import os
+import subprocess
+
+
+def setup_windows_compiler():
+    if os.name != "nt":
+        return
+
+    vs_variants = ["Community", "Professional", "Enterprise", "BuildTools"]
+    base_path = r"C:\Program Files\Microsoft Visual Studio\2022"
+
+    vcvars_path = None
+    for variant in vs_variants:
+        path = os.path.join(base_path, variant, r"VC\Auxiliary\Build\vcvars64.bat")
+        if os.path.exists(path):
+            vcvars_path = path
+            break
+
+    if not vcvars_path:
+        return
+
+    # THE FIX:
+    # Instead of shell=True (which triggers the Conda AutoRun),
+    # we explicitly call cmd.exe with the /d flag (Disable AutoRun).
+    # Then we run the .bat and 'set' to capture the environment.
+
+    cmd = f'cmd.exe /d /c "{vcvars_path}" && set'
+
+    try:
+        # Note: shell=False is safer here because we are calling cmd.exe directly
+        output = subprocess.check_output(
+            cmd, shell=False, text=True, stderr=subprocess.STDOUT
+        )
+
+        for line in output.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                os.environ[key] = value
+        print("Successfully loaded MSVC environment (bypassing Conda AutoRun).")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to load MSVC: {e.output}")
+
+
+setup_windows_compiler()
 import torch
 
-from dendritic.experiments.utils.param_utils import find_matching_hidden_dims
 
 torch.backends.cuda.matmul.fp32_precision = "ieee"
 # torch.set_float32_matmul_precision('medium')
 # torch.set_float32_matmul_precision('high')
-from torch.utils.data import DataLoader
 from transformers.models.gpt2 import GPT2Tokenizer
 
 # Project‑specific imports
 from dendritic.experiments.utils.PretrainingConfig import (
-    CohortSchedulerConfig,
     PretrainingConfig,
 )
 from dendritic.experiments.utils.ExperimentResults import ExperimentResults
@@ -49,9 +84,7 @@ from dendritic.experiments.utils.sweep import variant_identifier
 from dendritic.experiments.utils.experiment_utils import (
     set_random_seed,
     setup_logging,
-    debug_dataset_integrity,
 )
-from dendritic.dataset_handlers.factory import get_handler
 
 # Confidence experiment imports
 from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
@@ -62,6 +95,48 @@ os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
 
 # Logger instance
 logger = logging.getLogger(__name__)
+
+
+def calculate_required_max_samples(config) -> int:
+    """
+    Calculate appropriate max_samples based on training configuration.
+
+    Formula:
+    1. train_blocks_needed = training_steps * batch_size
+    2. test_blocks_needed = min(train_blocks_needed * eval_split_ratio,
+                                batch_size * eval_batches)
+    3. total_blocks_needed = train_blocks_needed + test_blocks_needed
+
+    When grouped=False (default), each sample produces at most 1 block.
+    When grouped=True, samples are concatenated and can produce multiple blocks.
+
+    Returns:
+        Appropriate max_samples value
+    """
+    train_blocks = config.training_steps * config.batch_size
+    test_blocks = min(
+        int(train_blocks * config.eval_split_ratio),
+        config.batch_size * config.eval_batches,
+    )
+    total_blocks = train_blocks + test_blocks
+
+    if getattr(config, "grouped", False):
+        # When grouped=True, samples are concatenated
+        # Average blocks per sample depends on average tokens per sample
+        # Conservative estimate: avg_tokens_per_sample = 2048
+        avg_tokens_per_sample = 2048
+        blocks_per_sample = avg_tokens_per_sample / config.max_seq_len
+        safety_factor = 1.5  # Account for variability
+        required_samples = int(total_blocks / blocks_per_sample * safety_factor)
+    else:
+        # When grouped=False, each sample produces at most 1 block
+        # Need extra samples for those shorter than max_seq_len
+        safety_factor = 1.2  # 20% extra
+        required_samples = int(total_blocks * safety_factor)
+
+    # Ensure minimum samples
+    min_samples = 1000
+    return max(required_samples, min_samples)
 
 
 def run_pretraining_experiment(
@@ -219,25 +294,39 @@ def main() -> None:
         # Create tokenizer (same as other experiments)
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         tokenizer.pad_token = tokenizer.eos_token
-        
+
         # Create configuration with reasonable defaults
         config = ConfidenceExperimentConfig(
-            training_steps=1000,  # Reasonable for PoC
-            seeds=[42, 123, 456],  # Multiple seeds for statistical significance
-            batch_size=4,
+            training_steps=1500,  # Reasonable for PoC
+            seeds=[42],  # , 123, 456],  # Multiple seeds for statistical significance
+            batch_size=10,
             vocab_size=50257,  # GPT-2 vocab size
-            embed_dim=256,
+            embed_dim=400,
             num_heads=8,
             num_layers=6,
-            max_seq_len=128,
+            max_seq_len=512,
             dropout=0.1,
+            scheduler_type="cosine",
             results_dir="results/confidence_experiments",
+            dataset="tinystories",
         )
-        
+
+        # Calculate appropriate max_samples based on training configuration
+        # When grouped=False (default), each sample produces at most 1 block
+        required_max_samples = calculate_required_max_samples(config)
+        config.dataset_kwargs = {"max_samples": required_max_samples}
+
+        logger.info(
+            f"Calculated max_samples: {required_max_samples} "
+            f"(based on {config.training_steps} steps, batch_size={config.batch_size})"
+        )
+
         # Run the experiment
         experiment = ConfidenceAwareExperiment(config)
         results = experiment.run(tokenizer)
-        logger.info(f"Confidence experiment completed. Results saved to {config.results_dir}")
+        logger.info(
+            f"Confidence experiment completed. Results saved to {config.results_dir}"
+        )
 
     logger.info("\nAll experiments complete!")
 

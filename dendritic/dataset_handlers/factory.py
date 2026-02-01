@@ -27,7 +27,7 @@ def get_handler(
 ) -> BaseDatasetHandler:
     """
     Instantiate a handler for the given dataset name.
-    
+
     Parameters
     ----------
     name : str
@@ -38,20 +38,22 @@ def get_handler(
         Maximum sequence length.
     **kwargs : dict
         Additional keyword arguments passed to the handler's constructor.
-        
+
     Returns
     -------
     BaseDatasetHandler
         Instantiated handler.
-        
+
     Raises
     ------
     KeyError
         If `name` is not registered.
     """
     if name not in _REGISTRY:
-        raise KeyError(f"No dataset handler registered for '{name}'. "
-                       f"Available handlers: {list(_REGISTRY.keys())}")
+        raise KeyError(
+            f"No dataset handler registered for '{name}'. "
+            f"Available handlers: {list(_REGISTRY.keys())}"
+        )
     handler_cls = _REGISTRY[name]
     return handler_cls(tokenizer, max_length=max_length, **kwargs)
 
@@ -64,18 +66,28 @@ def list_handlers() -> Dict[str, Type[BaseDatasetHandler]]:
 # Auto‑register default handlers
 try:
     from dendritic.dataset_handlers.WikiTextHandler import WikiTextHandler
+
     register_handler("wikitext", WikiTextHandler)
 except ImportError:
     pass
 
 try:
     from dendritic.dataset_handlers.OpenWebMathHandler import OpenWebMathHandler
+
     register_handler("openwebmath", OpenWebMathHandler)
 except ImportError:
     pass
 
 try:
     from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
+
     register_handler("python_alpaca", PythonAlpacaHandler)
+except ImportError:
+    pass
+
+try:
+    from dendritic.dataset_handlers.TinyStoriesHandler import TinyStoriesHandler
+
+    register_handler("tinystories", TinyStoriesHandler)
 except ImportError:
     pass
