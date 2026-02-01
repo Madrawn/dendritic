@@ -104,7 +104,7 @@ def plot_results(results_file, output_prefix="confidence"):
         # 1. Plot comprehensive loss curves
         print("1. Generating loss curves plot...")
         loss_curves_path = f"{output_prefix}_loss_curves.png"
-        fig1 = plot_loss_curves(
+        plot_loss_curves(
             results=str(results_file),
             output_path=loss_curves_path,
             show=False,  # Don't show interactively when saving

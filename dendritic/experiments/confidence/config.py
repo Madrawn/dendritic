@@ -27,7 +27,6 @@ class ConfidenceExperimentConfig(PretrainingConfig):
 
     def __post_init__(self):
         """Initialize derived fields after dataclass initialization."""
-        super().__post_init__()
         # Ensure results_dir is a string path
         if not self.results_dir:
             self.results_dir = "results/confidence_experiments"

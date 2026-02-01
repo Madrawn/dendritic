@@ -13,83 +13,10 @@ Usage:
 import argparse
 import logging
 import os
+import subprocess
 from pathlib import Path
 
-import os
-import subprocess
 import torch
-
-
-def setup_windows_compiler():
-    if os.name != "nt":
-        return
-
-    # Try multiple Visual Studio versions
-    vs_versions = ["2022", "2019", "2017"]
-    vs_variants = ["Community", "Professional", "Enterprise", "BuildTools"]
-
-    vcvars_path = None
-    for version in vs_versions:
-        base_path = rf"C:\Program Files\Microsoft Visual Studio\{version}"
-        for variant in vs_variants:
-            path = os.path.join(base_path, variant, r"VC\Auxiliary\Build\vcvars64.bat")
-            if os.path.exists(path):
-                vcvars_path = path
-                print(f"Found vcvars at {vcvars_path}")
-                break
-        if vcvars_path:
-            break
-
-    if not vcvars_path:
-        print("No Visual Studio vcvars64.bat found.")
-        return
-
-    # Disable Conda AutoRun by setting environment variable
-    env = os.environ.copy()
-    env["CONDA_AUTO_RUN"] = "0"
-
-    # Try up to 3 times with a small delay
-    for attempt in range(3):
-        try:
-            # Original command that worked before
-            cmd = f'cmd.exe /d /c "{vcvars_path}" && set'
-            output = subprocess.check_output(
-                cmd, shell=False, text=True, stderr=subprocess.STDOUT, env=env
-            )
-
-            for line in output.splitlines():
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    os.environ[key] = value
-            print("Successfully loaded MSVC environment (bypassing Conda AutoRun).")
-            return
-        except subprocess.CalledProcessError as e:
-            print(f"Attempt {attempt + 1} failed: {e.output}")
-            if attempt < 2:
-                import time
-
-                time.sleep(1)
-            else:
-                print("Failed to load MSVC after 3 attempts.")
-                # Fallback: try to locate cl.exe manually
-                import glob
-
-                cl_path = None
-                for version in vs_versions:
-                    for variant in vs_variants:
-                        pattern = rf"C:\Program Files\Microsoft Visual Studio\{version}\{variant}\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe"
-                        matches = glob.glob(pattern)
-                        if matches:
-                            cl_path = matches[0]
-                            break
-                    if cl_path:
-                        break
-                if cl_path:
-                    cl_dir = os.path.dirname(cl_path)
-                    os.environ["PATH"] = cl_dir + ";" + os.environ.get("PATH", "")
-                    print(f"Added cl.exe directory to PATH: {cl_dir}")
-                else:
-                    print("Could not locate cl.exe.")
 
 
 # torch.set_float32_matmul_precision('medium')
@@ -115,8 +42,128 @@ from dendritic.experiments.utils.experiment_utils import (
     setup_logging,
 )
 
-# Confidence experiment imports - imported conditionally inside confidence experiment block
-# to avoid circular imports
+
+def _find_vcvars_path() -> str | None:
+    """Search for Visual Studio vcvars64.bat file.
+
+    Returns:
+        Path to vcvars64.bat if found, None otherwise.
+    """
+    vs_versions = ["2022", "2019", "2017"]
+    vs_variants = ["Community", "Professional", "Enterprise", "BuildTools"]
+
+    for version in vs_versions:
+        base_path = rf"C:\Program Files\Microsoft Visual Studio\{version}"
+        for variant in vs_variants:
+            path = os.path.join(base_path, variant, r"VC\Auxiliary\Build\vcvars64.bat")
+            if os.path.exists(path):
+                print(f"Found vcvars at {path}")
+                return path
+    return None
+
+
+def _find_cl_exe() -> str | None:
+    """Search for Visual Studio cl.exe compiler.
+
+    Returns:
+        Path to cl.exe if found, None otherwise.
+    """
+    import glob
+
+    vs_versions = ["2022", "2019", "2017"]
+    vs_variants = ["Community", "Professional", "Enterprise", "BuildTools"]
+
+    for version in vs_versions:
+        for variant in vs_variants:
+            pattern = (
+                rf"C:\Program Files\Microsoft Visual Studio\{version}\{variant}"
+                r"\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe"
+            )
+            matches = glob.glob(pattern)
+            if matches:
+                return matches[0]
+    return None
+
+
+def _load_vcvars_environment(vcvars_path: str) -> bool:
+    """Execute vcvars64.bat and load environment variables.
+
+    Args:
+        vcvars_path: Path to vcvars64.bat
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    import time
+
+    MAX_ATTEMPTS = 3
+    RETRY_DELAY_SECONDS = 1
+
+    # Disable Conda AutoRun by setting environment variable
+    env = os.environ.copy()
+    env["CONDA_AUTO_RUN"] = "0"
+
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            cmd = f'cmd.exe /d /c "{vcvars_path}" && set'
+            output = subprocess.check_output(
+                cmd, shell=False, text=True, stderr=subprocess.STDOUT, env=env
+            )
+
+            for line in output.splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    os.environ[key] = value
+            print("Successfully loaded MSVC environment (bypassing Conda AutoRun).")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Attempt {attempt + 1} failed: {e.output}")
+            if attempt < MAX_ATTEMPTS - 1:
+                time.sleep(RETRY_DELAY_SECONDS)
+
+    return False
+
+
+def setup_windows_compiler():
+    """Set up Windows compiler environment for CUDA extensions.
+
+    This function searches for Visual Studio compiler tools and sets up
+    the environment variables needed for compiling CUDA extensions on Windows.
+    """
+    if os.name != "nt":
+        return
+
+    # Try to find and load vcvars64.bat
+    vcvars_path = _find_vcvars_path()
+    if not vcvars_path:
+        print("No Visual Studio vcvars64.bat found.")
+        # Fall back to manual cl.exe search
+        cl_path = _find_cl_exe()
+        if cl_path:
+            cl_dir = os.path.dirname(cl_path)
+            os.environ["PATH"] = cl_dir + ";" + os.environ.get("PATH", "")
+            print(f"Added cl.exe directory to PATH: {cl_dir}")
+        else:
+            print("Could not locate cl.exe.")
+        return
+
+    # Try to load environment from vcvars
+    if _load_vcvars_environment(vcvars_path):
+        return
+
+    # If vcvars failed, fall back to manual cl.exe search
+    print("Failed to load MSVC after 3 attempts.")
+    cl_path = _find_cl_exe()
+    if cl_path:
+        cl_dir = os.path.dirname(cl_path)
+        os.environ["PATH"] = cl_dir + ";" + os.environ.get("PATH", "")
+        print(f"Added cl.exe directory to PATH: {cl_dir}")
+    else:
+        print("Could not locate cl.exe.")
+
+
+# Confidence experiment imports - imported conditionally inside confidence experiment
+# block to avoid circular imports
 
 # Environment configuration
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
@@ -360,7 +407,7 @@ def main() -> None:
 
         # Run the experiment
         experiment = ConfidenceAwareExperiment(config)
-        results = experiment.run(tokenizer)
+        experiment.run(tokenizer)
         logger.info(
             f"Confidence experiment completed. Results saved to {config.results_dir}"
         )
