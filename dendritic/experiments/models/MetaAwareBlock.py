@@ -60,7 +60,7 @@ class AdaptiveLayer(nn.Module):
         return normalized_x * (1 + scale) + shift
 
 
-class DirectetaAwareBlock(nn.Module):
+class DirectMetaAwareBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, mlp_module, dropout=0.0):
         super().__init__()
         self.ln1 = nn.LayerNorm(embed_dim)

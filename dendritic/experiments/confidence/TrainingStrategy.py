@@ -10,7 +10,7 @@ import torch.nn as nn
 from abc import ABC, abstractmethod
 from typing import Any
 
-from experiments.models.MiniGPT import ConfidenceAwareGPT
+from dendritic.experiments.models.MiniGPT import ConfidenceAwareGPT
 
 
 class TrainingStrategy(ABC):

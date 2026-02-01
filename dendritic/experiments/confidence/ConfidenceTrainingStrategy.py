@@ -1,4 +1,3 @@
-from unittest import result
 from dendritic.experiments.confidence.TrainingStrategy import TrainingStrategy
 from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
 from dendritic.experiments.confidence.results import ConfidenceTrainingResult
