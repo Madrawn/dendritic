@@ -4,6 +4,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 from dendritic.experiments.models.MiniGPT import MiniGPT
+from dendritic.experiments.utils.loss_utils import compute_language_modeling_loss
 
 
 def evaluate(
@@ -22,11 +23,13 @@ def evaluate(
             input_ids = batch["input_ids"].to(device)
             labels = batch["labels"].to(device)
 
-            outputs = model(input_ids, labels=labels)
+            # Model no longer computes loss internally
+            logits = model(input_ids)
+            loss = compute_language_modeling_loss(logits, labels)
 
             # Count non-masked tokens
             non_masked = (labels != -100).sum().item()
-            total_loss += outputs["loss"].item() * non_masked
+            total_loss += loss.item() * non_masked
             total_tokens += non_masked
 
     return total_loss / total_tokens if total_tokens > 0 else float("nan")

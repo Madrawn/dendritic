@@ -192,9 +192,7 @@ class TestConfidenceExperimentIntegration:
         # Get confidence model output
         confidence_model.eval()
         with torch.no_grad():
-            output = confidence_model(
-                input_ids=input_ids, labels=None, confidence_scalars=None
-            )
+            output = confidence_model(input_ids=input_ids, confidence_scalars=None)
 
         # Verify output structure
         assert "logits" in output

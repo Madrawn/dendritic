@@ -4,6 +4,11 @@ from .BaselineMLP import BaselineMLP
 from .DendriticPretrainingMLP import DendriticPretrainingMLP
 from .DendriticStackPretrainingMLP import DendriticStackPretrainingMLP
 from .TransformerBlock import TransformerBlock
+from dendritic.experiments.utils.loss_utils import (
+    compute_language_modeling_loss,
+    compute_confidence_loss,
+    compute_sequence_language_modeling_loss,
+)
 import torch.nn.functional as F
 
 
@@ -89,9 +94,16 @@ class MiniGPT(nn.Module):
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(
-        self, input_ids: torch.Tensor, labels: torch.Tensor | None = None
-    ) -> dict[str, torch.Tensor]:
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the MiniGPT model.
+
+        Args:
+            input_ids: Tensor of shape [batch_size, seq_len] with token indices
+
+        Returns:
+            Logits tensor of shape [batch_size, seq_len, vocab_size]
+        """
         B, T = input_ids.shape
 
         # Embeddings
@@ -100,37 +112,23 @@ class MiniGPT(nn.Module):
         # Transformer blocks
         x, _ = self.forward_through_blocks(x, mask)
 
-        output = self.compute_logits_and_loss(labels, x)
-
-        return output
-
-    def compute_logits_and_loss(
-        self, labels: torch.Tensor | None, x: torch.Tensor
-    ) -> dict[str, torch.Tensor]:
+        # Final normalization and projection
         x = self.ln_f(x)
         logits = self.head(x)
 
-        output = {"logits": logits}
+        return logits
 
-        # Compute loss if labels provided
-        if labels is not None:
-            loss = self.calculate_loss(labels, logits)
-            output["loss"] = loss
-        return output
+    def get_logits(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Get logits from the model (alias for forward for clarity).
 
-    def calculate_loss(self, labels, logits) -> torch.Tensor:
-        # logits[..., :-1, :] predicts labels[..., 1:]
+        Args:
+            input_ids: Tensor of shape [batch_size, seq_len] with token indices
 
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-
-        loss = nn.functional.cross_entropy(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1),
-            ignore_index=-100,
-        )
-
-        return loss
+        Returns:
+            Logits tensor of shape [batch_size, seq_len, vocab_size]
+        """
+        return self.forward(input_ids)
 
     def forward_through_blocks(
         self, x: torch.Tensor, mask: torch.Tensor | None
@@ -182,12 +180,24 @@ class ConfidenceAwareGPT(MiniGPT):
     def forward(
         self,
         input_ids: torch.Tensor,
-        labels: torch.Tensor | None = None,
         confidence_scalars: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
+        """
+        Forward pass of the ConfidenceAwareGPT model.
+
+        Args:
+            input_ids: Tensor of shape [batch_size, seq_len] with token indices
+            confidence_scalars: Optional tensor of shape [batch_size, seq_len, 1]
+                with confidence values. If None, defaults to zeros.
+
+        Returns:
+            Dictionary with:
+                - "logits": Tensor of shape [batch_size, seq_len, vocab_size]
+                - "confidence_pred": Tensor of shape [batch_size, seq_len]
+        """
         B, T = input_ids.shape
 
-        # ADDED: Handle default confidence
+        # Handle default confidence
         if confidence_scalars is None:
             # Default to 0.0 (neutral confidence)
             confidence_scalars = torch.zeros(
@@ -208,22 +218,13 @@ class ConfidenceAwareGPT(MiniGPT):
         # 1. Standard Token Logits
         logits = self.head(x)
 
-        # 2. ADDED: Predict Future Loss
+        # 2. Predict Future Loss
         # Output shape: [B, T, 1] -> squeeze to [B, T] for easier loss calc later
         current_confidence_pred = self.confidence_predictor(
             torch.cat(all_outputs, dim=-1)
         ).squeeze(-1)
 
-        output = {"logits": logits, "confidence_pred": current_confidence_pred}
-
-        # Compute standard LM loss if labels provided
-        if labels is not None:
-            loss = self.calculate_loss(labels, logits)
-            output["loss"] = loss
-            # Note: We do NOT compute the confidence loss here.
-            # That requires the 2-pass lookahead.
-
-        return output
+        return {"logits": logits, "confidence_pred": current_confidence_pred}
 
     def forward_through_blocks(
         self,
@@ -266,12 +267,10 @@ class ConfidenceAwareGPT(MiniGPT):
 
             # Future losses at all positions
             # logits at positions 0..SeqLen-1 predict labels at positions 0..SeqLen-1
-            future_losses_baseline = F.cross_entropy(
-                logits_1.reshape(-1, logits_1.size(-1)),  # [B*SeqLen, vocab]
-                labels.reshape(-1),  # [B*SeqLen]
+            future_losses_baseline = compute_sequence_language_modeling_loss(
+                logits_1,
+                labels,
                 reduction="none",
-            ).view(
-                B, SeqLen
             )  # [B, SeqLen]
 
             # Prepare confidence input for pass 2 (shift right by 1)
@@ -293,17 +292,17 @@ class ConfidenceAwareGPT(MiniGPT):
         # Token prediction loss - USE SHIFTED LOGITS AND LABELS
         # Logits at positions 0..SeqLen-2 predict labels at positions 0..SeqLen-2
         # (We drop the last logit position since it doesn't have a "next" token to predict reliably in pass 2)
-        loss_lm = F.cross_entropy(
-            logits_2[:, :-1].reshape(-1, logits_2.size(-1)),  # [B*(SeqLen-1), vocab]
-            labels[:, :-1].reshape(-1),  # [B*(SeqLen-1)]
+        loss_lm = compute_language_modeling_loss(
+            logits_2[:, :-1],  # Only use up to SeqLen-1
+            labels[:, :-1],  # Only use up to SeqLen-1
             ignore_index=-100,
         )
 
         # Confidence loss: positions 0..SeqLen-2 predict their future difficulty
         # (We drop the last confidence position since we don't have its "future" to measure)
-        loss_confidence = F.mse_loss(
+        loss_confidence = compute_confidence_loss(
             conf_pred_2[:, :-1],  # [B, SeqLen-1]
-            future_losses_baseline[:, :-1].detach(),  # [B, SeqLen-1]
+            future_losses_baseline[:, :-1],  # [B, SeqLen-1]
         )
 
         total_loss = loss_lm + alpha * loss_confidence

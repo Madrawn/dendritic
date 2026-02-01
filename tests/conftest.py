@@ -128,8 +128,19 @@ def pytest_collection_modifyitems(config, items):
     # --- EXISTING: Logic to check for missing markers ---
     unmarked_tests = []
 
+    # Define your custom timeout for integration tests
+    INTEGRATION_TIMEOUT = 120
+
     for item in items:
-        # Check if the test item has any own markers
+        # 1. NEW: Check if 'integration' is in the markers
+        # We check own_markers to see if it was explicitly tagged
+        is_integration = any(
+            marker.name == "integration" for marker in item.own_markers
+        )
+
+        if is_integration:
+            # Add the timeout marker dynamically
+            item.add_marker(pytest.mark.timeout(INTEGRATION_TIMEOUT))
         if not item.own_markers:
             unmarked_tests.append(item.nodeid)
 

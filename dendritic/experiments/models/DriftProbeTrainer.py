@@ -4,15 +4,18 @@ import torch.nn.functional as F
 
 
 class DriftAwareTrainer:
-    def __init__(self, model: nn.Module):
+    def __init__(self, model: nn.Module, vocab_size: int):
         self.model = model
+        self.vocab_size = vocab_size
 
     def training_step(self, batch):
         clean_tokens, poisoned_tokens, labels = batch
 
         # Standard LM loss on clean data
         clean_logits, clean_info = self.model(clean_tokens)
-        lm_loss = F.cross_entropy(clean_logits.view(-1, vocab_size), labels.view(-1))
+        lm_loss = F.cross_entropy(
+            clean_logits.view(-1, self.vocab_size), labels.view(-1)
+        )
 
         # Self-supervised drift loss: probe should predict actual variance
         with torch.no_grad():
@@ -27,7 +30,7 @@ class DriftAwareTrainer:
             poison_logits, poison_info = self.model(poisoned_tokens)
             # Labels are CORRECT answers, not what context implies
             adversarial_loss = F.cross_entropy(
-                poison_logits.view(-1, vocab_size), labels.view(-1)
+                poison_logits.view(-1, self.vocab_size), labels.view(-1)
             )
             # Probe should detect high drift on poisoned
             poison_drift_loss = F.mse_loss(
@@ -57,7 +60,6 @@ class DriftAwareTrainer:
 
         elif method == "attention":
             return self._drift_attention(tokens)  # Cheapest
-
 
         else:
             raise ValueError(f"Unknown method: {method}")

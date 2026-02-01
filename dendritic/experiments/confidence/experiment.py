@@ -23,6 +23,7 @@ from dendritic.experiments.utils.TrainingResult import TrainingResult
 from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
 from dendritic.experiments.utils.param_utils import find_matching_hidden_dims
 from dendritic.experiments.utils.experiment_utils import set_random_seed
+from dendritic.experiments.utils.loss_utils import compute_language_modeling_loss
 
 from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
 from dendritic.experiments.confidence.data_loader import prepare_confidence_data
@@ -207,10 +208,8 @@ class ConfidenceAwareExperiment:
                 # Two-pass evaluation
                 result = ConfidenceAwareGPT.two_pass_training_step(
                     model=model,
-                    prev_conf=prev_conf,
                     tokens_t=tokens_t,
                     tokens_t_plus_1=tokens_t_plus_1,
-                    tokens_t_plus_2=tokens_t_plus_2,
                     alpha=self.config.confidence_alpha,
                 )
 
@@ -246,8 +245,10 @@ class ConfidenceAwareExperiment:
                     dim=1,
                 )  # shape [batch_size, seq_len]
 
-                outputs = model(input_ids, labels=seq_labels)
-                total_loss += outputs["loss"].item()
+                # Model no longer computes loss internally
+                logits = model(input_ids)
+                loss = compute_language_modeling_loss(logits, seq_labels)
+                total_loss += loss.item()
                 total_batches += 1
 
         model.train()

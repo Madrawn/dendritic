@@ -2,6 +2,7 @@ from dendritic.experiments.confidence.TrainingStrategy import TrainingStrategy
 from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
 from dendritic.experiments.confidence.results import ConfidenceTrainingResult
 from dendritic.experiments.models.MiniGPT import ConfidenceAwareGPT
+from dendritic.experiments.utils.loss_utils import compute_language_modeling_loss
 
 
 import numpy as np
@@ -63,10 +64,22 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
         )
 
         # Forward pass with default confidence scalars (zeros)
-        outputs = model(input_ids, labels=seq_labels, confidence_scalars=None)
+        # Model no longer computes loss internally
+        outputs = model(input_ids, confidence_scalars=None)
+
+        # Compute language modeling loss externally
+        loss = compute_language_modeling_loss(outputs["logits"], seq_labels)
 
         # Return loss_lm for consistency with training step
-        return {"loss_lm": outputs["loss"], "loss": outputs["loss"]}
+        # Note: Confidence loss is not computed during evaluation because it requires
+        # two-pass lookahead (future losses) which are not available in evaluation mode.
+        return {
+            "loss_lm": loss,
+            "loss": loss,
+            "confidence_loss": torch.tensor(
+                0.0, device=loss.device
+            ),  # No confidence loss in evaluation (intentional design)
+        }
 
     def prepare_batch(
         self, batch: tuple[torch.Tensor, ...], device: str

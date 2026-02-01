@@ -6,6 +6,7 @@ from confidence and standard model training, while keeping model-specific
 differences in separate strategy classes.
 """
 
+from typing import cast
 from dendritic.experiments.utils.TrainingResult import TrainingResult
 from dendritic.experiments.utils.experiment_utils import set_random_seed
 from dendritic.experiments.confidence.TrainingStrategy import TrainingStrategy
@@ -23,7 +24,7 @@ import gc
 import logging
 import os
 import time
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 import os
 import subprocess
 
@@ -88,7 +89,7 @@ class UnifiedTrainer:
     def _evaluate_with_iterator(
         self,
         model: nn.Module,
-        dataloader: Generator,
+        dataloader: Iterable,
         max_batches: int | None,
         device: str,
     ) -> float:
@@ -126,7 +127,7 @@ class UnifiedTrainer:
         return total_loss / total_tokens if total_tokens > 0 else float("nan")
 
     def _evaluate(
-        self, model: nn.Module, eval_loader, device: str, num_batches: int
+        self, model: nn.Module, eval_loader: Iterable, device: str, num_batches: int
     ) -> float:
         """
         Evaluate model on validation set.
@@ -168,7 +169,7 @@ class UnifiedTrainer:
         return total_loss / total_batches if total_batches > 0 else float("inf")
 
     def train(
-        self, model: nn.Module, train_loader, eval_loader, seed: int
+        self, model: nn.Module, train_loader: Iterable, eval_loader: Iterable, seed: int
     ) -> TrainingResult | ConfidenceTrainingResult:
         """
         Unified training loop.
@@ -306,6 +307,7 @@ class UnifiedTrainer:
             # Scheduler Step
             if scheduler:
                 if self.config.scheduler_type == "cosine":
+                    scheduler = cast(torch.optim.lr_scheduler.LambdaLR, scheduler)
                     scheduler.step()
                 elif self.config.scheduler_type == "plateau":
                     # Plateau scheduler needs metrics, will be called during evaluation
@@ -388,6 +390,9 @@ class UnifiedTrainer:
 
                 # Plateau scheduler step
                 if self.config.scheduler_type == "plateau" and scheduler is not None:
+                    scheduler = cast(
+                        torch.optim.lr_scheduler.ReduceLROnPlateau, scheduler
+                    )
                     scheduler.step(
                         avg_eval_loss
                     )  # ReduceLROnPlateau expects metrics parameter

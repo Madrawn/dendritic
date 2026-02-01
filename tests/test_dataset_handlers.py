@@ -3,8 +3,6 @@ import dendritic
 from dendritic.dataset_handlers.BaseDatasetHandler import BaseDatasetHandler
 from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
 from dendritic.dataset_handlers.dataset_handlers import (
-    GitHubCodeHandler,
-    TinyStoriesHandler,
     WikiTextHandler,
 )
 from transformers.models.gpt2 import GPT2Tokenizer
@@ -16,6 +14,7 @@ import torch
 import dendritic.experiments
 import dendritic.experiments.utils
 import dendritic.experiments.utils.PretrainingConfig
+from dendritic.experiments.run_experiments import calculate_required_max_samples
 from test_data_pipelines import MockTokenizer
 
 
@@ -64,12 +63,11 @@ def test_wikitext_tokenize_malformed(wikitext_handler):
 
 def sample_generator():
     long_text = "sample text " * 1000
-    for _ in range(60):
+    for _ in range(200):
         yield {"text": long_text}
 
 
-@pytest.mark.timeout(120)
-@pytest.mark.unit
+@pytest.mark.integration
 # @pytest.mark.skip(reason="TODO")
 def test_wikitext_prepare_data(mock_tokenizer: PreTrainedTokenizer, mocker):
     """Test WikiText end-to-end data preparation"""
@@ -80,23 +78,25 @@ def test_wikitext_prepare_data(mock_tokenizer: PreTrainedTokenizer, mocker):
     # Use longer samples to ensure they don't get filtered out or result in empty blocks
     mock_data = IterableDataset.from_generator(sample_generator)
     mock_load.return_value = mock_data
-    cfg = dendritic.experiments.utils.PretrainingConfig.PretrainingConfig(
-        training_steps=30,
+    cfg = dendritic.experiments.utils.PretrainingConfig(
+        training_steps=300,
         batch_size=2,
         max_seq_len=256,
         eval_split_ratio=0.5,
         grouped=True,
         group_separator="EOS_token",
     )
-    prepared = handler.prepare_pretraining_dataloaders(config=cfg, num_workers=0)
-    print(f"DEBUG prepared keys: {list(prepared.keys())}")
+    required_max_samples = calculate_required_max_samples(cfg)
+    cfg.dataset_kwargs = {"max_samples": required_max_samples}
+    prepared = handler.prepare_pretraining_dataloaders(
+        config=cfg, num_workers=0, kwargs=cfg.dataset_kwargs
+    )
 
     assert "train" in prepared
     assert "eval" in prepared
     train_length = sum(1 for _ in prepared["train"])
-    print(f"DEBUG train_length (batches): {train_length}")
-    # with training_steps=3, batch_size=2, eval_split_ratio=0.5 we expect samples
-    assert train_length >= int(30)
+    # with training_steps=300, batch_size=2, eval_split_ratio=0.5 we expect samples
+    assert train_length >= int(300)
     # For DataLoader, we check format on the underlying dataset
     # Instead of checking .format["type"]
     # We fetch one batch and verify the content is a torch.Tensor
@@ -107,8 +107,7 @@ def test_wikitext_prepare_data(mock_tokenizer: PreTrainedTokenizer, mocker):
     assert first_batch["input_ids"].shape == (cfg.batch_size, cfg.max_seq_len)
 
 
-@pytest.mark.timeout(120)
-@pytest.mark.unit
+@pytest.mark.integration
 # @pytest.mark.skip(reason="TODO")
 def test_wikitext_prepare_data_ungrouped(mocker):
     """Test WikiText end-to-end data preparation with grouped=False."""
@@ -123,7 +122,7 @@ def test_wikitext_prepare_data_ungrouped(mocker):
     mock_data = IterableDataset.from_generator(sample_generator)
     mock_load.return_value = mock_data
     training_steps_count = 25
-    cfg = dendritic.experiments.utils.PretrainingConfig.PretrainingConfig(
+    cfg = dendritic.experiments.utils.PretrainingConfig(
         training_steps=training_steps_count,
         batch_size=2,
         max_seq_len=256,
@@ -131,8 +130,11 @@ def test_wikitext_prepare_data_ungrouped(mocker):
         grouped=False,
         group_separator="EOS_token",
     )
-    print(handler.tokenizer.__class__.__name__)
-    prepared = handler.prepare_pretraining_dataloaders(config=cfg)
+    required_max_samples = calculate_required_max_samples(cfg)
+    cfg.dataset_kwargs = {"max_samples": required_max_samples}
+    prepared = handler.prepare_pretraining_dataloaders(
+        config=cfg, kwargs=cfg.dataset_kwargs
+    )
     assert "train" in prepared
     assert "eval" in prepared
     train_length = sum(1 for _ in prepared["train"])
@@ -227,7 +229,6 @@ def test_alpaca_prepare_data(alpaca_handler, mocker):
         {"prompt": ["test1", "test2"], "output": ["out1", "out2"]}
     )
     mock_load.return_value = mock_data
-    print(f"DEBUG: Mock return type: {type(mock_data)}")  # Add debug log
 
     prepared = alpaca_handler.prepare_data()
     assert "train" in prepared

@@ -288,13 +288,11 @@ class TestConfidenceAwareExperiment:
 
         sig = inspect.signature(ConfidenceAwareGPT.two_pass_training_step)
 
-        # Check required parameters
+        # Check required parameters (updated to match refactored signature)
         expected_params = [
             "model",
-            "prev_conf",
             "tokens_t",
             "tokens_t_plus_1",
-            "tokens_t_plus_2",
             "alpha",
         ]
         for param in expected_params:

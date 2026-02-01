@@ -16,7 +16,8 @@ Key controls:
 import logging
 import os
 import time
-from typing import Generator, Literal
+from collections.abc import Generator
+from typing import Literal, cast
 import torch
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
@@ -47,6 +48,7 @@ from .TrainingResult import TrainingResult
 from .ExperimentResults import ExperimentResults
 from .custom_scaler import CohortLRScheduler
 from .param_utils import find_matching_hidden_dims
+from .loss_utils import compute_language_modeling_loss
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -204,7 +206,7 @@ class PretrainingExperiment:
             torch.backends.cudnn.allow_tf32 = True
             torch.backends.cudnn.benchmark = True
 
-        model: GPT2LMHeadModel = model.to(device)  # type: ignore
+        model = cast(GPT2LMHeadModel, model.to(device))  # type: ignore
 
         # ========== 2. COMPILATION ==========
         # Windows -> default, Linux -> reduce-overhead
@@ -289,15 +291,28 @@ class PretrainingExperiment:
         queued_loss = None
         avg_train_loss_tensor = torch.tensor(15.0, device="cpu")
         avg_eval_loss = 15.0
+        loss = torch.tensor(0.0, device="cpu")
         for step in progress:
             # Robust fetch (handles Windows iterator reset internally)
             input_ids, labels = next(train_iter)
 
             # Forward
             with torch.amp.autocast("cuda", enabled=use_cuda, dtype=amp_dtype):  # type: ignore
-                outputs: dict = model.forward(input_ids, labels=labels)  # type: ignore
-
-                loss = outputs["loss"]
+                # Handle different model types
+                # For MiniGPT: model returns logits
+                # For GPT2LMHeadModel: model returns CausalLMOutputWithCrossAttentions
+                if (
+                    hasattr(model, "__class__")
+                    and "MiniGPT" in model.__class__.__name__
+                ):
+                    # MiniGPT model - compute loss externally
+                    logits = model.forward(input_ids)  # type: ignore
+                    loss = compute_language_modeling_loss(logits, labels)
+                else:
+                    # Hugging Face model - still returns loss
+                    model = cast(GPT2LMHeadModel, model)  # type: ignore
+                    outputs = model.forward(input_ids, labels=labels)  # type: ignore
+                    loss = outputs["loss"]
 
             assert loss is not None, "Loss is None during training."
             # Backward
@@ -403,6 +418,7 @@ class PretrainingExperiment:
                     break
 
         training_time = time.time() - start_time
+        assert isinstance(loss, torch.Tensor)
         final_train_loss = loss.item()
 
         # Final Eval
@@ -465,11 +481,24 @@ class PretrainingExperiment:
                 i += 1
                 input_ids = input_ids.to(device)
                 labels = labels.to(device)
-                outputs = model(input_ids, labels=labels)
+                # Handle different model types
+                # For MiniGPT: model returns logits
+                # For GPT2LMHeadModel: model returns CausalLMOutputWithCrossAttentions
+                if (
+                    hasattr(model, "__class__")
+                    and "MiniGPT" in model.__class__.__name__
+                ):
+                    # MiniGPT model - compute loss externally
+                    logits = model(input_ids)
+                    loss = compute_language_modeling_loss(logits, labels)
+                else:
+                    # Hugging Face model - still returns loss
+                    outputs = model(input_ids, labels=labels)
+                    loss = outputs["loss"]
 
                 # Count non-masked tokens
                 non_masked = (labels != -100).sum().item()
-                total_loss += outputs["loss"].item() * non_masked
+                total_loss += loss.item() * non_masked
                 total_tokens += non_masked
 
         return total_loss / total_tokens if total_tokens > 0 else float("nan")

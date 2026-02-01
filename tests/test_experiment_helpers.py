@@ -5,11 +5,9 @@ import logging
 import pytest
 from pathlib import Path
 
-from dendritic.experiments.run_experiments import (
-    set_random_seed,
-)
-from dendritic.experiments.utils.experiment_utils import (
+from dendritic.experiments.utils import (
     debug_dataset_integrity,
+    set_random_seed,
 )
 
 

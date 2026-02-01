@@ -9,13 +9,14 @@ class DendriticPretrainingMLP(nn.Module):
     Uses DendriticLayer for fc1 (input projection) where quadratic
     interactions are most valuable.
     """
+
     def __init__(
         self,
         embed_dim: int,
         hidden_dim: int,
         poly_rank: int = 16,
         poly_degree: int = 3,
-        dropout: float = 0.0
+        dropout: float = 0.0,
     ):
         super().__init__()
 
@@ -27,7 +28,6 @@ class DendriticPretrainingMLP(nn.Module):
             hidden_dim,
             poly_rank=poly_rank,
             poly_degree=poly_degree,
-            init_scale=0.1
         )
         self.fc2 = nn.Linear(hidden_dim, embed_dim)
         self.act = nn.GELU()

@@ -137,13 +137,13 @@ def test_parameter_count() -> Tuple[int, int]:
     else:
 
         expected = (
-            DEFAULT_INPUT_DIM * DEFAULT_OUTPUT_DIM + DEFAULT_OUTPUT_DIM   # linear
-            + 2 * poly_rank * DEFAULT_INPUT_DIM                           # projections
-            + 2 * poly_rank                                               # projection biases
-            + DEFAULT_OUTPUT_DIM * poly_rank                              # poly_out
-            + 1                                                           # alpha
+            DEFAULT_INPUT_DIM * DEFAULT_OUTPUT_DIM
+            + DEFAULT_OUTPUT_DIM  # linear
+            + 2 * poly_rank * DEFAULT_INPUT_DIM  # projections
+            + 2 * poly_rank  # projection biases
+            + DEFAULT_OUTPUT_DIM * poly_rank  # poly_out
+            + 1  # alpha
         )
-
 
     assert (
         n_params == expected
@@ -318,7 +318,7 @@ def test_gate_and_bias_gradients() -> None:
     """
     Verify gradient behavior for ReZero gates (alpha, alpha_diag) and projection biases.
 
-    Phase A (alpha=0): 
+    Phase A (alpha=0):
       - alpha should receive gradient
       - proj_biases should have zero gradient (multiplicative path closed)
     Phase B (alpha≈1e-3):
@@ -335,9 +335,11 @@ def test_gate_and_bias_gradients() -> None:
         # Ensure gates are exactly 0
         if hasattr(model, "alpha"):
             with torch.no_grad():
+                assert isinstance(model.alpha, torch.Tensor)
                 model.alpha.zero_()
         if hasattr(model, "alpha_diag"):
             with torch.no_grad():
+                assert isinstance(model.alpha_diag, torch.Tensor)
                 model.alpha_diag.zero_()
 
         y = model(x)
@@ -346,26 +348,33 @@ def test_gate_and_bias_gradients() -> None:
 
         # alpha should have gradient
         if hasattr(model, "alpha"):
-            assert model.alpha.grad is not None, f"[{name}] alpha.grad is None in Phase A"
+            assert (
+                isinstance(model.alpha, torch.Tensor) and model.alpha.grad is not None
+            ), f"[{name}] alpha.grad is None in Phase A"
             # typically non-zero; we don't hard fail on 0.0 since it's technically possible on symmetric losses,
             # but it's extremely unlikely with random inputs and 'sum' loss.
-            assert model.alpha.grad.abs().sum().item() != 0.0, f"[{name}] alpha.grad is zero in Phase A"
+            assert (
+                model.alpha.grad.abs().sum().item() != 0.0
+            ), f"[{name}] alpha.grad is zero in Phase A"
 
         # alpha_diag (if diagonal is enabled) should also have gradient
         if getattr(model, "use_diagonal", False) and hasattr(model, "alpha_diag"):
-            assert model.alpha_diag.grad is not None, f"[{name}] alpha_diag.grad is None in Phase A"
+            assert (
+                isinstance(model.alpha_diag, torch.Tensor)
+                and model.alpha_diag.grad is not None
+            ), f"[{name}] alpha_diag.grad is None in Phase A"
             # can be zero if diag branch contributes zero to 'sum' by symmetry; don't hard fail on nonzero value
             # but at least check grad exists.
-        
-
 
         # -------- Phase B: gate slightly open (alpha=1e-3) --------
         model.zero_grad(set_to_none=True)
         if hasattr(model, "alpha"):
             with torch.no_grad():
+                assert isinstance(model.alpha, torch.Tensor)
                 model.alpha.fill_(1e-3)
         if getattr(model, "use_diagonal", False) and hasattr(model, "alpha_diag"):
             with torch.no_grad():
+                assert isinstance(model.alpha_diag, torch.Tensor)
                 model.alpha_diag.fill_(1e-3)
 
         y = model(x)
@@ -374,19 +383,26 @@ def test_gate_and_bias_gradients() -> None:
 
         # alpha should still have gradient
         if hasattr(model, "alpha"):
-            assert model.alpha.grad is not None, f"[{name}] alpha.grad is None in Phase B"
-            assert model.alpha.grad.abs().sum().item() != 0.0, f"[{name}] alpha.grad is zero in Phase B"
-
-
+            assert (
+                isinstance(model.alpha, torch.Tensor) and model.alpha.grad is not None
+            ), f"[{name}] alpha.grad is None in Phase B"
+            assert (
+                model.alpha.grad.abs().sum().item() != 0.0
+            ), f"[{name}] alpha.grad is zero in Phase B"
 
         print(f"✓ Gradient gate/bias checks passed for {name}")
 
     # Check both DendriticLayer and DendriticStack
-    layer = DendriticLayer(DEFAULT_INPUT_DIM, DEFAULT_OUTPUT_DIM, poly_rank=DEFAULT_POLY_RANK)
-    stack = DendriticStack(DEFAULT_INPUT_DIM, DEFAULT_OUTPUT_DIM, poly_rank=DEFAULT_POLY_RANK)
+    layer = DendriticLayer(
+        DEFAULT_INPUT_DIM, DEFAULT_OUTPUT_DIM, poly_rank=DEFAULT_POLY_RANK
+    )
+    stack = DendriticStack(
+        DEFAULT_INPUT_DIM, DEFAULT_OUTPUT_DIM, poly_rank=DEFAULT_POLY_RANK
+    )
 
     _check_model("DendriticLayer", layer)
     _check_model("DendriticStack", stack)
+
 
 if __name__ == "__main__":
     _test()

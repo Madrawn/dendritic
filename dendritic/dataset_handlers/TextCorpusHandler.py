@@ -6,7 +6,7 @@ via Hugging Face datasets library.
 
 from abc import ABC
 from calendar import c
-from typing import Any
+from typing import Any, cast
 from datasets import (
     Dataset,
     IterableDataset,
@@ -14,13 +14,17 @@ from datasets import (
     IterableDatasetDict,
     load_dataset,
 )
+from torch.utils.data import (
+    DataLoader,
+    Dataset as TorchDataset,
+    IterableDataset as TorchIterableDataset,
+)
 from tqdm import tqdm
 from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.tokenization_utils_base import BatchEncoding
 
 from dendritic.dataset_handlers.BaseDatasetHandler import BaseDatasetHandler
 from functools import partial
-from torch.utils.data import DataLoader
 from datasets import IterableDataset, Dataset
 
 # --- 1. Define Helper Functions at Top Level ---
@@ -324,7 +328,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
 
     def prepare_pretraining_dataloaders(
         self, config: Any, num_workers: int = 0, kwargs=None
-    ):
+    ) -> dict[str, DataLoader[Any]]:
         """
         Prepare data for pretraining with block concatenation (grouping).
 
@@ -345,7 +349,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
 
         Returns
         -------
-        dict[str, Any]
+        dict[str, DataLoader[Any]]
             {'train': DataLoader, 'eval': DataLoader}
         """
         if kwargs is None:
@@ -417,12 +421,15 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         test_iter = iter(processed_stream.take(test_blocks_needed))
         test_blocks = list(tqdm(test_iter, total=test_blocks_needed))
 
-        test_dataset = Dataset.from_dict(
-            {
-                "input_ids": [b["input_ids"] for b in test_blocks],
-                "labels": [b["labels"] for b in test_blocks],
-            }
-        ).with_format("torch")
+        test_dataset = cast(
+            TorchDataset,
+            Dataset.from_dict(
+                {
+                    "input_ids": [b["input_ids"] for b in test_blocks],
+                    "labels": [b["labels"] for b in test_blocks],
+                }
+            ).with_format("torch"),
+        )
         # test_dataset = processed_stream.take(int(test_blocks_needed)).with_format(
         # "torch"
         # )
@@ -431,7 +438,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         # This creates a NEW IterableDataset that fast-forwards the underlying stream.
         # This is safe for multiprocessing.
         train_dataset = processed_stream.skip(int(test_blocks_needed))
-        train_dataset = train_dataset.with_format("torch")
+        train_dataset = cast(TorchIterableDataset, train_dataset.with_format("torch"))
 
         # --- DataLoaders ---
 

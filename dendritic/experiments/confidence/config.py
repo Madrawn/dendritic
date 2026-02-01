@@ -2,11 +2,9 @@
 Configuration for confidence-aware GPT experiments.
 """
 
-from dataclasses import dataclass, field
-from typing import Literal, get_type_hints
+from dataclasses import dataclass
 from dendritic.experiments.utils.PretrainingConfig import (
     PretrainingConfig,
-    CohortSchedulerConfig,
 )
 
 

@@ -1,5 +1,6 @@
 from dendritic.experiments.utils.TrainingResult import TrainingResult
 from dendritic.experiments.confidence.TrainingStrategy import TrainingStrategy
+from dendritic.experiments.utils.loss_utils import compute_language_modeling_loss
 
 
 import numpy as np
@@ -40,11 +41,14 @@ class StandardTrainingStrategy(TrainingStrategy):
             dim=1,
         )  # shape [batch_size, seq_len]
 
-        # Forward pass
-        outputs = model(input_ids, labels=seq_labels)
+        # Forward pass (model no longer computes loss internally)
+        logits = model(input_ids)
+
+        # Compute loss externally
+        loss = compute_language_modeling_loss(logits, seq_labels)
 
         # Return loss_lm for consistency with evaluation logic
-        return {"loss_lm": outputs["loss"], "loss": outputs["loss"]}
+        return {"loss_lm": loss, "loss": loss}
 
     def evaluation_step(
         self, model: nn.Module, batch: tuple[torch.Tensor, ...], device: str, **kwargs
@@ -75,10 +79,13 @@ class StandardTrainingStrategy(TrainingStrategy):
             dim=1,
         )
 
-        # Forward pass
-        outputs = model(input_ids, labels=seq_labels)
+        # Forward pass (model no longer computes loss internally)
+        logits = model(input_ids)
 
-        return {"loss": outputs["loss"]}
+        # Compute loss externally
+        loss = compute_language_modeling_loss(logits, seq_labels)
+
+        return {"loss": loss}
 
     def prepare_batch(
         self, batch: tuple[torch.Tensor, ...], device: str

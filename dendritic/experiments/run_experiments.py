@@ -17,6 +17,7 @@ from pathlib import Path
 
 import os
 import subprocess
+import torch
 
 
 def setup_windows_compiler():
@@ -91,11 +92,6 @@ def setup_windows_compiler():
                     print("Could not locate cl.exe.")
 
 
-setup_windows_compiler()
-import torch
-
-
-torch.backends.cuda.matmul.fp32_precision = "ieee"
 # torch.set_float32_matmul_precision('medium')
 # torch.set_float32_matmul_precision('high')
 from transformers.models.gpt2 import GPT2Tokenizer
@@ -119,9 +115,8 @@ from dendritic.experiments.utils.experiment_utils import (
     setup_logging,
 )
 
-# Confidence experiment imports
-from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
-from dendritic.experiments.confidence.experiment import ConfidenceAwareExperiment
+# Confidence experiment imports - imported conditionally inside confidence experiment block
+# to avoid circular imports
 
 # Environment configuration
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Fix pygame spam
@@ -248,6 +243,9 @@ def main() -> None:
     Parses command‑line arguments, configures logging, and dispatches
     the requested experiments (pretraining, finetuning, or both).
     """
+    setup_windows_compiler()
+
+    torch.backends.cuda.matmul.fp32_precision = "ieee"
     parser = argparse.ArgumentParser(description="Run dendritic layer experiments")
     parser.add_argument(
         "--experiment",
@@ -321,6 +319,12 @@ def main() -> None:
         run_finetuning_experiment_wrapper(args.device, args.num_workers)
 
     if args.experiment == "confidence":
+        # Import here to avoid circular imports
+        from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
+        from dendritic.experiments.confidence.experiment import (
+            ConfidenceAwareExperiment,
+        )
+
         logger.info("\n" + "=" * 70)
         logger.info("RUNNING CONFIDENCE-AWARE EXPERIMENT")
         logger.info("=" * 70)
@@ -330,7 +334,7 @@ def main() -> None:
 
         # Create configuration with reasonable defaults
         config = ConfidenceExperimentConfig(
-            training_steps=650,  # Reasonable for PoC
+            training_steps=1000,  # Reasonable for PoC
             seeds=[42],  # , 123, 456],  # Multiple seeds for statistical significance
             batch_size=10,
             vocab_size=50257,  # GPT-2 vocab size

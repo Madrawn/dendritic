@@ -10,10 +10,10 @@ from dendritic.dataset_handlers.TextCorpusHandler import TextCorpusHandler
 
 class WikiTextHandler(TextCorpusHandler):
     """Handler for WikiText-103 dataset."""
-    
+
     dataset_name = "wikitext"
     text_column = "text"
-    
+
     def __init__(
         self,
         tokenizer: PreTrainedTokenizer,
@@ -32,10 +32,10 @@ class WikiTextHandler(TextCorpusHandler):
             dataset_name=dataset_name,
             text_column=text_column,
         )
-    
+
     def load_default_data(
         self,
-        max_samples: int=1,
+        max_samples: int = 10,
         split: str = "train",
         test_size: float = 0.1,
         seed: int = 42,
@@ -44,7 +44,7 @@ class WikiTextHandler(TextCorpusHandler):
     ) -> Dict[str, Any]:
         """
         Load WikiText-103 dataset with proper configuration.
-        
+
         Overrides to specify the sub‑dataset name "wikitext-103-raw-v1".
         """
         # Use the specific configuration
