@@ -9,7 +9,7 @@ from dendritic.experiments.utils.loss_utils import (
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 from typing import Any, cast
@@ -23,7 +23,7 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
         self.prev_conf = None
 
     def training_step(self, model: ConfidenceAwareGPT | nn.Module, batch, device, **kwargs):
-        tokens_t, tokens_t_plus_1, _ = batch
+        tokens_t, tokens_t_plus_1 = batch
         model = cast(ConfidenceAwareGPT, model)
         result = model.two_pass_training_step(
             model=model,
@@ -42,7 +42,7 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
 
         Args:
             model: ConfidenceAwareGPT model
-            batch: Tuple of (tokens_t, tokens_t_plus_1, tokens_t_plus_2)
+            batch: Tuple of (tokens_t, tokens_t_plus_1)
             device: Device to run on
 
         Returns:
@@ -50,7 +50,7 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
         """
         # Move tensors to device
         batch = self.prepare_batch(batch, device)
-        tokens_t, tokens_t_plus_1, _ = batch
+        tokens_t, tokens_t_plus_1 = batch
 
         # Prepare input and labels
         input_ids = tokens_t
@@ -86,17 +86,16 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
         Prepare batch for confidence training.
 
         Args:
-            batch: Tuple of (tokens_t, tokens_t_plus_1, tokens_t_plus_2)
+            batch: Tuple of (tokens_t, tokens_t_plus_1)
             device: Device to move tensors to
 
         Returns:
             Prepared batch
         """
-        tokens_t, tokens_t_plus_1, tokens_t_plus_2 = batch
+        tokens_t, tokens_t_plus_1 = batch
         return (
             tokens_t.to(device),
             tokens_t_plus_1.to(device),
-            tokens_t_plus_2.to(device),
         )
 
     def create_result(
@@ -142,6 +141,6 @@ class ConfidenceTrainingStrategy(TrainingStrategy):
             config=self.config.__dict__,
             confidence_loss_history=additional_metrics.get("confidence_loss_history", []),
             token_loss_history=additional_metrics.get("token_loss_history", []),
-            confidence_predictions=additional_metrics.get("confidence_predictions", []),
+            loss_predictions=additional_metrics.get("loss_predictions", []),
             actual_future_losses=additional_metrics.get("actual_future_losses", []),
         )

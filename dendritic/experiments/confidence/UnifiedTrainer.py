@@ -187,7 +187,7 @@ class UnifiedTrainer:
 
             # Determine if we should use confidence-aware sampling
             # Only for ConfidenceAwareGPT models
-            use_confidence = hasattr(model, "confidence_predictor")
+            use_confidence = hasattr(model, "loss_predictor")
 
             sampling_config = SamplingConfig(
                 device=self.device,
@@ -197,7 +197,7 @@ class UnifiedTrainer:
                 use_confidence=use_confidence,
                 include_confidence_formatting=True,
             )
-            generated, confidence_predictions, formatted_tokens_with_confidence = sample_model_output(
+            generated, loss_predictions, formatted_tokens_with_confidence = sample_model_output(
                 model=model,
                 tokenizer=self.tokenizer,
                 prompt=self.config.sampling_prompt,
@@ -208,10 +208,10 @@ class UnifiedTrainer:
             truncated = generated[:100] + "..." if len(generated) > 100 else generated
             log_message = f"{self.model_type} seed={seed} step={step}: eval_loss={eval_loss:.4f}, sampled: {truncated}"
 
-            # Add confidence predictions to log if available
-            if confidence_predictions is not None and len(confidence_predictions) > 0:
-                avg_conf = sum(confidence_predictions) / len(confidence_predictions)
-                log_message += f", avg_conf={avg_conf:.4f}"
+            # Add loss predictions to log if available
+            if loss_predictions is not None and len(loss_predictions) > 0:
+                avg_loss_pred = sum(loss_predictions) / len(loss_predictions)
+                log_message += f", avg_loss_pred={avg_loss_pred:.4f}"
 
             logging.info(log_message)
 
@@ -222,7 +222,7 @@ class UnifiedTrainer:
                 model_type=self.model_type,
                 eval_loss=eval_loss,
                 sampled_text=generated,
-                confidence_predictions=confidence_predictions,
+                loss_predictions=loss_predictions,
                 formatted_tokens_with_confidence=formatted_tokens_with_confidence,
             )
 
@@ -236,7 +236,7 @@ class UnifiedTrainer:
         model_type,
         eval_loss,
         sampled_text,
-        confidence_predictions=None,
+        loss_predictions=None,
         formatted_tokens_with_confidence=None,
     ):
         """
@@ -248,7 +248,7 @@ class UnifiedTrainer:
             model_type: Type of model
             eval_loss: Evaluation loss
             sampled_text: Full sampled text
-            confidence_predictions: Optional list of confidence predictions
+            loss_predictions: Optional list of loss predictions
         """
         from datetime import datetime
         from pathlib import Path
@@ -268,10 +268,10 @@ class UnifiedTrainer:
             f.write(f"Eval Loss: {eval_loss:.4f}\n")
             f.write(f"Sampled Tokens: {sampled_text}\n")
 
-            # Add confidence predictions if available
-            if confidence_predictions is not None and len(confidence_predictions) > 0:
-                f.write(f"Confidence Predictions: {confidence_predictions}\n")
-                f.write(f"Avg Confidence: {sum(confidence_predictions) / len(confidence_predictions):.4f}\n")
+            # Add loss predictions if available
+            if loss_predictions is not None and len(loss_predictions) > 0:
+                f.write(f"Loss Predictions: {loss_predictions}\n")
+                f.write(f"Avg Loss Prediction: {sum(loss_predictions) / len(loss_predictions):.4f}\n")
 
                 # Add formatted tokens with confidence if available
                 if formatted_tokens_with_confidence is not None:
@@ -360,7 +360,7 @@ class UnifiedTrainer:
         strategy_metrics = {
             "confidence_loss_history": [],
             "token_loss_history": [],
-            "confidence_predictions": [],
+            "loss_predictions": [],
             "actual_future_losses": [],
         }
 
@@ -430,8 +430,8 @@ class UnifiedTrainer:
                 strategy_metrics["confidence_loss_history"].append(step_result["loss_confidence"].item())
             if "loss_lm" in step_result:
                 strategy_metrics["token_loss_history"].append(step_result["loss_lm"].item())
-            if "pred_conf_t" in step_result:
-                strategy_metrics["confidence_predictions"].append(step_result["pred_conf_t"].mean().item())
+            if "pred_loss_t" in step_result:
+                strategy_metrics["loss_predictions"].append(step_result["pred_loss_t"].mean().item())
 
             # Accumulate Loss (GPU resident) - ported from pretraining
             avg_train_loss_tensor = avg_train_loss_tensor * 0.9 + 0.1 * loss.detach().cpu()

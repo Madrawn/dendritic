@@ -77,9 +77,7 @@ def find_latest_results_file(results_dir="results/confidence_experiments"):
     latest_dt, latest_file = results_files[0]
 
     print(f"Found {len(results_files)} results files")
-    print(
-        f"Latest file: {latest_file.name} (from {latest_dt.strftime('%Y-%m-%d %H:%M:%S')})"
-    )
+    print(f"Latest file: {latest_file.name} (from {latest_dt.strftime('%Y-%m-%d %H:%M:%S')})")
 
     return latest_file
 
@@ -115,7 +113,7 @@ def plot_results(results_file, output_prefix="confidence"):
         # 2. Plot calibration analysis
         print("2. Generating calibration curve plot...")
         calibration_path = f"{output_prefix}_calibration.png"
-        fig2 = plot_calibration_curve(
+        plot_calibration_curve(
             results=str(results_file),
             output_path=calibration_path,
             show=False,
@@ -126,7 +124,7 @@ def plot_results(results_file, output_prefix="confidence"):
         # 3. Plot training time comparison
         print("3. Generating training time comparison plot...")
         training_time_path = f"{output_prefix}_training_time.png"
-        fig3 = plot_training_time_comparison(
+        plot_training_time_comparison(
             results=str(results_file),
             output_path=training_time_path,
             show=False,

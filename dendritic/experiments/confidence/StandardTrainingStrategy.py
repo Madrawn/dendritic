@@ -24,13 +24,13 @@ class StandardTrainingStrategy(TrainingStrategy):
 
         Args:
             model: MiniGPT model
-            batch: Tuple of (tokens_t, tokens_t_plus_1, _)
+            batch: Tuple of (tokens_t, tokens_t_plus_1)
             device: Device to run on
 
         Returns:
             Dictionary with loss metrics
         """
-        tokens_t, tokens_t_plus_1, _ = batch
+        tokens_t, tokens_t_plus_1 = batch
 
         # Prepare input and labels
         input_ids = tokens_t
@@ -60,7 +60,7 @@ class StandardTrainingStrategy(TrainingStrategy):
 
         Args:
             model: MiniGPT model
-            batch: Tuple of (tokens_t, tokens_t_plus_1, _)
+            batch: Tuple of (tokens_t, tokens_t_plus_1)
             device: Device to run on
 
         Returns:
@@ -68,7 +68,7 @@ class StandardTrainingStrategy(TrainingStrategy):
         """
         # Move tensors to device
         batch = self.prepare_batch(batch, device)
-        tokens_t, tokens_t_plus_1, _ = batch
+        tokens_t, tokens_t_plus_1 = batch
 
         # Prepare input and labels
         input_ids = tokens_t
@@ -94,17 +94,16 @@ class StandardTrainingStrategy(TrainingStrategy):
         Prepare batch for standard training.
 
         Args:
-            batch: Tuple of (tokens_t, tokens_t_plus_1, _)
+            batch: Tuple of (tokens_t, tokens_t_plus_1)
             device: Device to move tensors to
 
         Returns:
             Prepared batch
         """
-        tokens_t, tokens_t_plus_1, _ = batch
+        tokens_t, tokens_t_plus_1 = batch
         return (
             tokens_t.to(device),
             tokens_t_plus_1.to(device),
-            torch.empty(0),  # Placeholder for consistency
         )
 
     def create_result(

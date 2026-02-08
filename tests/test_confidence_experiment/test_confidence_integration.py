@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301, PLR2004
 """
 Integration tests for confidence-aware GPT experiment.
 
@@ -60,7 +61,7 @@ class TestConfidenceExperimentIntegration:
 
         # Verify experiment attributes
         assert experiment.config == small_config
-        assert experiment.device in ["cuda", "cpu"]
+        assert experiment.device in {"cuda", "cpu"}
 
         # Create models
         standard_model, confidence_model = experiment.create_models()
@@ -73,8 +74,8 @@ class TestConfidenceExperimentIntegration:
         # Models might not be moved to device yet in create_models()
         std_device = next(standard_model.parameters()).device.type
         conf_device = next(confidence_model.parameters()).device.type
-        assert std_device in ["cpu", "cuda"]
-        assert conf_device in ["cpu", "cuda"]
+        assert std_device in {"cpu", "cuda"}
+        assert conf_device in {"cpu", "cuda"}
         assert std_device == conf_device  # Both should be on same device
 
         # Verify parameter counts are reasonable
@@ -112,25 +113,23 @@ class TestConfidenceExperimentIntegration:
         # Try to get a batch
         batch = next(iter(train_loader))
 
-        # Confidence data loader returns tuple of three tensors
-        # (tokens_t, tokens_t_plus_1, tokens_t_plus_2)
+        # Confidence data loader returns tuple of two tensors
+        # (tokens_t, tokens_t_plus_1)
         assert isinstance(batch, tuple)
-        assert len(batch) == 3
+        assert len(batch) == 2
 
-        tokens_t, tokens_t_plus_1, tokens_t_plus_2 = batch
+        tokens_t, tokens_t_plus_1 = batch
 
         # Verify shapes
         assert tokens_t.shape == (small_config.batch_size, small_config.max_seq_len)
-        # tokens_t_plus_1 and tokens_t_plus_2 are single tokens (not sequences)
+        # tokens_t_plus_1 is a single token (not a sequence)
         assert tokens_t_plus_1.shape == (small_config.batch_size,)
-        assert tokens_t_plus_2.shape == (small_config.batch_size,)
 
         # Verify they are tensors
         import torch
 
         assert isinstance(tokens_t, torch.Tensor)
         assert isinstance(tokens_t_plus_1, torch.Tensor)
-        assert isinstance(tokens_t_plus_2, torch.Tensor)
 
     @pytest.mark.integration
     def test_minimal_experiment_run(self, small_config, tokenizer):
@@ -172,7 +171,7 @@ class TestConfidenceExperimentIntegration:
         assert len(json_files) > 0
 
     @pytest.mark.integration
-    def test_confidence_predictions_sanity(self, small_config, tokenizer):
+    def test_loss_predictions_sanity(self, small_config, tokenizer):
         """Test that confidence predictions are within reasonable bounds."""
         experiment = ConfidenceAwareExperiment(small_config)
         standard_model, confidence_model = experiment.create_models()
@@ -196,21 +195,21 @@ class TestConfidenceExperimentIntegration:
 
         # Verify output structure
         assert "logits" in output
-        assert "confidence_pred" in output
+        assert "loss_prediction" in output
 
-        # Verify confidence values are reasonable (not NaN or extreme)
-        confidence = output["confidence_pred"]
-        assert confidence.shape == (batch_size, seq_len)
+        # Verify loss predictions are reasonable (not NaN or extreme)
+        loss_pred = output["loss_prediction"]
+        assert loss_pred.shape == (batch_size, seq_len)
 
         # Check for NaN or infinite values
-        assert not torch.any(torch.isnan(confidence))
-        assert not torch.any(torch.isinf(confidence))
+        assert not torch.any(torch.isnan(loss_pred))
+        assert not torch.any(torch.isinf(loss_pred))
 
-        # Confidence values are raw predictions, not sigmoid outputs
+        # Loss prediction values are raw predictions, not bounded
         # They can be any real number, but should be reasonable
         # Initial bias is set to 2.0, so values around 2-4 are expected
-        mean_val = confidence.mean().item()
-        std_val = confidence.std().item()
+        mean_val = loss_pred.mean().item()
+        std_val = loss_pred.std().item()
         assert abs(mean_val - 2.0) < 5.0  # Mean should be around initial bias
         assert std_val < 5.0  # Reasonable standard deviation
 

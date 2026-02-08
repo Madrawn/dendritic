@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301, PLR2004
 """
 Tests for the ConfidenceAwareExperiment class.
 """
@@ -78,8 +79,8 @@ class TestConfidenceAwareExperiment:
         assert isinstance(confidence_model, ConfidenceAwareGPT)
 
         # Check that models have different architectures
-        assert hasattr(confidence_model, "confidence_predictor")
-        assert not hasattr(standard_model, "confidence_predictor")
+        assert hasattr(confidence_model, "loss_predictor")
+        assert not hasattr(standard_model, "loss_predictor")
 
         # Log parameter counts (should be printed)
         std_params = sum(p.numel() for p in standard_model.parameters())
@@ -131,7 +132,7 @@ class TestConfidenceAwareExperiment:
             config={},
             confidence_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.5, 2.4, 2.3],
-            confidence_predictions=[0.1, 0.2, 0.3],
+            loss_predictions=[0.1, 0.2, 0.3],
             actual_future_losses=[2.6, 2.5, 2.4],
         )
 
@@ -210,7 +211,7 @@ class TestConfidenceAwareExperiment:
             config={"test": "config"},
             confidence_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.0, 1.8, 1.6],
-            confidence_predictions=[0.8, 0.7, 0.6],
+            loss_predictions=[0.8, 0.7, 0.6],
             actual_future_losses=[1.2, 1.1, 1.0],
         )
         mock_train_conf.return_value = mock_conf_result
@@ -313,7 +314,7 @@ class TestConfidenceAwareExperiment:
             config={"test": "value"},
             confidence_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.5, 2.4, 2.3],
-            confidence_predictions=[0.1, 0.2, 0.3],
+            loss_predictions=[0.1, 0.2, 0.3],
             actual_future_losses=[2.6, 2.5, 2.4],
         )
 

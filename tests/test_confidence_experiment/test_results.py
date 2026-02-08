@@ -1,14 +1,13 @@
+# ruff: noqa: PLR6301, PLR2004
+
 """
 Unit tests for confidence experiment results module.
 """
 
 import pytest
-import json
-import tempfile
 import numpy as np
 from pathlib import Path
-from unittest.mock import patch, mock_open
-from datetime import datetime
+from unittest.mock import patch
 
 from dendritic.experiments.confidence.results import (
     ConfidenceTrainingResult,
@@ -29,7 +28,7 @@ class TestConfidenceTrainingResult:
     def test_initialization(self):
         """Test that ConfidenceTrainingResult can be initialized with all fields."""
         # Create a base TrainingResult
-        base_result = TrainingResult(
+        _ = TrainingResult(
             model_type="confidence",
             seed=42,
             final_train_loss=1.5,
@@ -56,7 +55,7 @@ class TestConfidenceTrainingResult:
             config={"vocab_size": 1000},
             confidence_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.0, 1.8, 1.6],
-            confidence_predictions=[0.8, 0.7, 0.6],
+            loss_predictions=[0.8, 0.7, 0.6],
             actual_future_losses=[1.2, 1.1, 1.0],
         )
 
@@ -70,7 +69,7 @@ class TestConfidenceTrainingResult:
         # Verify confidence-specific fields
         assert result.confidence_loss_history == [0.5, 0.4, 0.3]
         assert result.token_loss_history == [2.0, 1.8, 1.6]
-        assert result.confidence_predictions == [0.8, 0.7, 0.6]
+        assert result.loss_predictions == [0.8, 0.7, 0.6]
         assert result.actual_future_losses == [1.2, 1.1, 1.0]
 
     @pytest.mark.unit
@@ -92,7 +91,7 @@ class TestConfidenceTrainingResult:
         # Default fields should be empty lists
         assert result.confidence_loss_history == []
         assert result.token_loss_history == []
-        assert result.confidence_predictions == []
+        assert result.loss_predictions == []
         assert result.actual_future_losses == []
 
 
@@ -147,14 +146,12 @@ class TestConfidenceExperimentResults:
             config={"vocab_size": 1000},
             confidence_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.0, 1.8, 1.6],
-            confidence_predictions=[0.8, 0.7, 0.6],
+            loss_predictions=[0.8, 0.7, 0.6],
             actual_future_losses=[1.2, 1.1, 1.0],
         )
 
     @pytest.mark.unit
-    def test_initialization(
-        self, sample_config, sample_training_result, sample_confidence_result
-    ):
+    def test_initialization(self, sample_config, sample_training_result, sample_confidence_result):
         """Test that ConfidenceExperimentResults can be initialized."""
         results = ConfidenceExperimentResults(
             standard_model_results={"42": [sample_training_result]},
@@ -174,9 +171,7 @@ class TestConfidenceExperimentResults:
         assert results.parameter_counts["standard"] == 1000000
 
     @pytest.mark.unit
-    def test_to_dict(
-        self, sample_config, sample_training_result, sample_confidence_result
-    ):
+    def test_to_dict(self, sample_config, sample_training_result, sample_confidence_result):
         """Test to_dict method converts results to serializable dictionary."""
         results = ConfidenceExperimentResults(
             standard_model_results={"42": [sample_training_result]},
@@ -218,9 +213,7 @@ class TestConfidenceExperimentResults:
                         "final_perplexity": 7.5,
                         "best_eval_loss": 1.8,
                         "best_perplexity": 6.0,
-                        "loss_history": [
-                            {"step": 0, "train_loss": 3.0, "eval_loss": 3.5}
-                        ],
+                        "loss_history": [{"step": 0, "train_loss": 3.0, "eval_loss": 3.5}],
                         "training_time": 120.5,
                         "config": {"vocab_size": 1000},
                     }
@@ -236,14 +229,12 @@ class TestConfidenceExperimentResults:
                         "final_perplexity": 7.8,
                         "best_eval_loss": 1.9,
                         "best_perplexity": 6.2,
-                        "loss_history": [
-                            {"step": 0, "train_loss": 3.1, "eval_loss": 3.6}
-                        ],
+                        "loss_history": [{"step": 0, "train_loss": 3.1, "eval_loss": 3.6}],
                         "training_time": 130.5,
                         "config": {"vocab_size": 1000},
                         "confidence_loss_history": [0.5, 0.4, 0.3],
                         "token_loss_history": [2.0, 1.8, 1.6],
-                        "confidence_predictions": [0.8, 0.7, 0.6],
+                        "loss_predictions": [0.8, 0.7, 0.6],
                         "actual_future_losses": [1.2, 1.1, 1.0],
                     }
                 ]
@@ -327,9 +318,7 @@ class TestSerializationFunctions:
     @pytest.mark.unit
     def test_create_results_filename(self):
         """Test create_results_filename generates correct format."""
-        with patch(
-            "dendritic.experiments.confidence.results.datetime"
-        ) as mock_datetime:
+        with patch("dendritic.experiments.confidence.results.datetime") as mock_datetime:
             mock_datetime.now.return_value.strftime.return_value = "20240101_120000"
 
             filename = create_results_filename()
@@ -368,7 +357,7 @@ class TestSerializationFunctions:
             config={"vocab_size": 1000},
             confidence_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.0, 1.8, 1.6],
-            confidence_predictions=[0.8, 0.7, 0.6],
+            loss_predictions=[0.8, 0.7, 0.6],
             actual_future_losses=[1.2, 1.1, 1.0],
         )
 
@@ -393,10 +382,7 @@ class TestSerializationFunctions:
         # Verify loaded results match original
         assert loaded_results.timestamp == results.timestamp
         assert loaded_results.config.vocab_size == results.config.vocab_size
-        assert (
-            loaded_results.training_time["standard"]
-            == results.training_time["standard"]
-        )
+        assert loaded_results.training_time["standard"] == results.training_time["standard"]
 
         # Verify results structure
         assert "42" in loaded_results.standard_model_results

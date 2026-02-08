@@ -1,17 +1,16 @@
+# ruff: noqa: PLR6301, PLR2004
+
 """
 Unit tests for confidence experiment visualization module.
 """
 
 import pytest
 import json
-import numpy as np
 import matplotlib
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from pathlib import Path
-from unittest.mock import patch, mock_open, MagicMock
-from datetime import datetime
+from unittest.mock import MagicMock
 import tempfile
 
 # Use non-interactive backend for testing
@@ -91,7 +90,7 @@ def sample_results(sample_config):
         config={"vocab_size": 1000},
         confidence_loss_history=[0.5, 0.4, 0.3, 0.25, 0.2],
         token_loss_history=[2.0, 1.8, 1.6, 1.5, 1.4],
-        confidence_predictions=[0.8, 0.7, 0.6, 0.5, 0.4],
+        loss_predictions=[0.8, 0.7, 0.6, 0.5, 0.4],
         actual_future_losses=[1.2, 1.1, 1.0, 0.9, 0.8],
     )
 
@@ -138,7 +137,7 @@ def sample_results(sample_config):
                     config={"vocab_size": 1000},
                     confidence_loss_history=[0.6, 0.5, 0.4, 0.35, 0.3],
                     token_loss_history=[2.1, 1.9, 1.7, 1.6, 1.5],
-                    confidence_predictions=[0.9, 0.8, 0.7, 0.6, 0.5],
+                    loss_predictions=[0.9, 0.8, 0.7, 0.6, 0.5],
                     actual_future_losses=[1.3, 1.2, 1.1, 1.0, 0.9],
                 )
             ],
@@ -215,9 +214,7 @@ def test_plot_calibration_curve(sample_results, tmp_path):
 
     # Test saving to file
     output_path = tmp_path / "calibration.png"
-    fig = plot_calibration_curve(
-        results=sample_results, output_path=output_path, show=False
-    )
+    fig = plot_calibration_curve(results=sample_results, output_path=output_path, show=False)
 
     assert output_path.exists()
 
@@ -226,9 +223,7 @@ def test_plot_calibration_curve(sample_results, tmp_path):
 def test_plot_training_time_comparison(sample_results, tmp_path):
     """Test plot_training_time_comparison function."""
     # Test with results object
-    fig = plot_training_time_comparison(
-        results=sample_results, output_path=None, show=False
-    )
+    fig = plot_training_time_comparison(results=sample_results, output_path=None, show=False)
 
     assert fig is not None
     assert isinstance(fig, Figure)
@@ -240,9 +235,7 @@ def test_plot_training_time_comparison(sample_results, tmp_path):
 
     # Test saving to file
     output_path = tmp_path / "training_time.png"
-    fig = plot_training_time_comparison(
-        results=sample_results, output_path=output_path, show=False
-    )
+    fig = plot_training_time_comparison(results=sample_results, output_path=output_path, show=False)
 
     assert output_path.exists()
 
@@ -421,7 +414,7 @@ class TestInternalPlottingFunctions:
         # Should create scatter plot
         mock_axes.scatter.assert_called()
         mock_axes.plot.assert_called()  # For ideal line
-        mock_axes.set_title.assert_called_with("Confidence Calibration Scatter")
+        mock_axes.set_title.assert_called_with("Loss Prediction Calibration Scatter")
 
     @pytest.mark.unit
     def test_plot_calibration_scatter_empty(self, sample_config, mock_axes):
@@ -439,7 +432,7 @@ class TestInternalPlottingFunctions:
 
         # Should display "No calibration data available" text
         mock_axes.text.assert_called()
-        mock_axes.set_title.assert_called_with("Confidence Calibration Scatter")
+        mock_axes.set_title.assert_called_with("Loss Prediction Calibration Scatter")
 
     @pytest.mark.unit
     def test_plot_binned_calibration(self, sample_results, mock_axes):
@@ -449,7 +442,7 @@ class TestInternalPlottingFunctions:
         # Should create errorbar plot
         mock_axes.errorbar.assert_called()
         mock_axes.plot.assert_called()  # For ideal line
-        mock_axes.set_title.assert_called_with("Binned Calibration Curve")
+        mock_axes.set_title.assert_called_with("Binned Loss Prediction Curve")
 
     @pytest.mark.unit
     def test_plot_binned_calibration_empty(self, sample_config, mock_axes):
@@ -467,7 +460,7 @@ class TestInternalPlottingFunctions:
 
         # Should display "No calibration data available" text
         mock_axes.text.assert_called()
-        mock_axes.set_title.assert_called_with("Binned Calibration Curve")
+        mock_axes.set_title.assert_called_with("Binned Loss Prediction Curve")
 
 
 if __name__ == "__main__":

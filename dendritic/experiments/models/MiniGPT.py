@@ -160,11 +160,11 @@ class ConfidenceAwareGPT(BaseGPT):
             raise ValueError("take_meta must be a positive integer")
         # ADDED: The Head to predict the loss/confidence
         # Projects hidden_state [B, T, dim] -> [B, T, 1]
-        self.confidence_predictor = nn.Linear(self.embed_dim * self.take_meta, 1)
+        self.loss_predictor = nn.Linear(self.embed_dim * self.take_meta, 1)
 
         # Initialize bias to a positive value (e.g. 2.0 ~ perplexity 7.4)
         # Prevents initial "zero loss" predictions which cause instability
-        nn.init.constant_(self.confidence_predictor.bias, 2.0)
+        nn.init.constant_(self.loss_predictor.bias, 2.0)
 
     @staticmethod
     def create_transformer_block(embed_dim, num_heads, dropout, mlp) -> AdaptiveMetaAwareBlock:
@@ -187,7 +187,7 @@ class ConfidenceAwareGPT(BaseGPT):
         Returns:
             Dictionary with:
                 - "logits": Tensor of shape [batch_size, seq_len, vocab_size]
-                - "confidence_pred": Tensor of shape [batch_size, seq_len]
+                - "loss_prediction": Tensor of shape [batch_size, seq_len]
         """
         B, T = input_ids.shape
 
@@ -214,9 +214,9 @@ class ConfidenceAwareGPT(BaseGPT):
 
         # 2. Predict Future Loss
         # Output shape: [B, T, 1] -> squeeze to [B, T] for easier loss calc later
-        current_confidence_pred = self.confidence_predictor(torch.cat(all_outputs, dim=-1)).squeeze(-1)
+        loss_prediction = self.loss_predictor(torch.cat(all_outputs, dim=-1)).squeeze(-1)
 
-        return {"logits": logits, "confidence_pred": current_confidence_pred}
+        return {"logits": logits, "loss_prediction": loss_prediction}
 
     def forward_through_blocks(
         self,
@@ -244,7 +244,7 @@ class ConfidenceAwareGPT(BaseGPT):
         with torch.no_grad():
             outputs_1 = model(tokens_t, confidence_scalars=None)
             logits_1 = outputs_1["logits"]  # [B, SeqLen, vocab]
-            conf_pred_1 = outputs_1["confidence_pred"]  # [B, SeqLen]
+            loss_pred_1 = outputs_1["loss_prediction"]  # [B, SeqLen]
 
             # Create labels: for position i, the label is token at position i+1
             labels = torch.cat(
@@ -263,19 +263,19 @@ class ConfidenceAwareGPT(BaseGPT):
                 reduction="none",
             )  # [B, SeqLen]
 
-            # Prepare confidence input for pass 2 (shift right by 1)
-            conf_input = torch.cat(
+            # Prepare loss prediction input for pass 2 (shift right by 1)
+            loss_pred_input = torch.cat(
                 [
-                    torch.zeros(B, 1, 1, device=tokens_t.device, dtype=conf_pred_1.dtype),
-                    conf_pred_1[:, :-1].unsqueeze(-1),
+                    torch.zeros(B, 1, 1, device=tokens_t.device, dtype=loss_pred_1.dtype),
+                    loss_pred_1[:, :-1].unsqueeze(-1),
                 ],
                 dim=1,
             )  # [B, SeqLen, 1]
 
-        # ===== PASS 2: With confidence =====
-        outputs_2 = model(tokens_t, confidence_scalars=conf_input)
+        # ===== PASS 2: With loss prediction =====
+        outputs_2 = model(tokens_t, confidence_scalars=loss_pred_input)
         logits_2 = outputs_2["logits"]  # [B, SeqLen, vocab]
-        conf_pred_2 = outputs_2["confidence_pred"]  # [B, SeqLen]
+        loss_pred_2 = outputs_2["loss_prediction"]  # [B, SeqLen]
 
         # Token prediction loss
         # Logits at positions 0..SeqLen-2 predict labels at positions 0..SeqLen-2
@@ -286,10 +286,10 @@ class ConfidenceAwareGPT(BaseGPT):
             reduction="mean",
         )
 
-        # Confidence loss: positions 0..SeqLen-2 predict their future difficulty
-        # (We drop the last confidence position since we don't have its "future" to measure)
+        # Loss prediction loss: positions 0..SeqLen-2 predict their future difficulty
+        # (We drop the last loss prediction position since we don't have its "future" to measure)
         loss_confidence = compute_confidence_loss(
-            conf_pred_2[:, :-1],  # [B, SeqLen-1]
+            loss_pred_2[:, :-1],  # [B, SeqLen-1]
             future_losses_baseline[:, :-1],  # [B, SeqLen-1]
         )
 
@@ -299,5 +299,5 @@ class ConfidenceAwareGPT(BaseGPT):
             "total_loss": total_loss,
             "loss_lm": loss_lm,
             "loss_confidence": loss_confidence,
-            "pred_conf_t": conf_pred_2[:, -2],  # Second-to-last position for logging
+            "pred_loss_t": loss_pred_2[:, -2],  # Second-to-last position for logging
         }

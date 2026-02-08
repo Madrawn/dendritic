@@ -136,9 +136,7 @@ def plot_training_time_comparison(
 
     # Extract training times
     model_types = ["standard", "confidence"]
-    training_times = [
-        results.training_time.get(model_type, 0.0) for model_type in model_types
-    ]
+    training_times = [results.training_time.get(model_type, 0.0) for model_type in model_types]
 
     # Create bar chart
     bars = ax.bar(model_types, training_times, color=["#1f77b4", "#ff7f0e"])
@@ -156,9 +154,7 @@ def plot_training_time_comparison(
 
     # Calculate speedup/slowdown
     if training_times[0] > 0:
-        relative_change = (
-            (training_times[1] - training_times[0]) / training_times[0] * 100
-        )
+        relative_change = (training_times[1] - training_times[0]) / training_times[0] * 100
         change_text = (
             f"Slower by {abs(relative_change):.1f}%"
             if relative_change > 0
@@ -241,9 +237,7 @@ def generate_summary_statistics(
 
     # Extract metrics for both model types
     stats["standard"] = extract_metrics(results.standard_model_results, "standard")
-    stats["confidence"] = extract_metrics(
-        results.confidence_model_results, "confidence"
-    )
+    stats["confidence"] = extract_metrics(results.confidence_model_results, "confidence")
 
     # Calculate relative improvements
     if stats["standard"] and stats["confidence"]:
@@ -275,18 +269,13 @@ def _plot_token_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
         for result in result_list:
             # Extract training losses from loss_history
             if result.loss_history:
-                train_losses = [
-                    h.get("train_loss", h.get("train_loss_lm", 0))
-                    for h in result.loss_history
-                ]
+                train_losses = [h.get("train_loss", h.get("train_loss_lm", 0)) for h in result.loss_history]
                 std_token_losses.extend(train_losses)
 
     # Plot histograms
     if std_token_losses and conf_token_losses:
         ax.hist(std_token_losses, bins=50, alpha=0.5, label="Standard", color="blue")
-        ax.hist(
-            conf_token_losses, bins=50, alpha=0.5, label="Confidence", color="orange"
-        )
+        ax.hist(conf_token_losses, bins=50, alpha=0.5, label="Confidence", color="orange")
         ax.set_xlabel("Token Loss")
         ax.set_ylabel("Frequency")
         ax.set_title("Token Loss Distribution")
@@ -324,9 +313,7 @@ def _plot_confidence_loss(results: ConfidenceExperimentResults, ax: Axes):
         # Add rolling average
         if len(confidence_losses) > 100:
             window = min(100, len(confidence_losses) // 10)
-            rolling_avg = np.convolve(
-                confidence_losses, np.ones(window) / window, mode="valid"
-            )
+            rolling_avg = np.convolve(confidence_losses, np.ones(window) / window, mode="valid")
             ax.plot(
                 steps[window - 1 :],
                 rolling_avg,
@@ -378,15 +365,11 @@ def _plot_eval_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
 
         if std_data:
             std_steps_sorted, std_eval_sorted = zip(*std_data)
-            ax.plot(
-                std_steps_sorted, std_eval_sorted, "b-", alpha=0.7, label="Standard"
-            )
+            ax.plot(std_steps_sorted, std_eval_sorted, "b-", alpha=0.7, label="Standard")
 
         if conf_data:
             conf_steps_sorted, conf_eval_sorted = zip(*conf_data)
-            ax.plot(
-                conf_steps_sorted, conf_eval_sorted, "r-", alpha=0.7, label="Confidence"
-            )
+            ax.plot(conf_steps_sorted, conf_eval_sorted, "r-", alpha=0.7, label="Confidence")
 
         ax.set_xlabel("Training Step")
         ax.set_ylabel("Perplexity")
@@ -407,32 +390,28 @@ def _plot_eval_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
 
 
 def _plot_calibration_scatter(results: ConfidenceExperimentResults, ax: Axes):
-    """Plot scatter plot of confidence predictions vs actual future losses."""
-    confidence_predictions = []
+    """Plot scatter plot of loss predictions vs actual future losses."""
+    loss_predictions = []
     actual_future_losses = []
 
     for seed, result_list in results.confidence_model_results.items():
         for result in result_list:
-            if result.confidence_predictions and result.actual_future_losses:
+            if result.loss_predictions and result.actual_future_losses:
                 # Take matching lengths
-                min_len = min(
-                    len(result.confidence_predictions), len(result.actual_future_losses)
-                )
-                confidence_predictions.extend(result.confidence_predictions[:min_len])
+                min_len = min(len(result.loss_predictions), len(result.actual_future_losses))
+                loss_predictions.extend(result.loss_predictions[:min_len])
                 actual_future_losses.extend(result.actual_future_losses[:min_len])
 
-    if confidence_predictions and actual_future_losses:
-        ax.scatter(confidence_predictions, actual_future_losses, alpha=0.5, s=10)
-        ax.set_xlabel("Predicted Confidence")
+    if loss_predictions and actual_future_losses:
+        ax.scatter(loss_predictions, actual_future_losses, alpha=0.5, s=10)
+        ax.set_xlabel("Predicted Loss")
         ax.set_ylabel("Actual Future Loss")
-        ax.set_title("Confidence Calibration Scatter")
+        ax.set_title("Loss Prediction Calibration Scatter")
 
-        # Add ideal calibration line (confidence = 1/loss)
-        x_ideal = np.linspace(
-            min(confidence_predictions), max(confidence_predictions), 100
-        )
-        y_ideal = 1.0 / (np.array(x_ideal) + 1e-8)  # Avoid division by zero
-        ax.plot(x_ideal, y_ideal, "r--", alpha=0.7, label="Ideal: confidence = 1/loss")
+        # Add ideal calibration line (loss prediction = actual loss)
+        x_ideal = np.linspace(min(loss_predictions), max(loss_predictions), 100)
+        y_ideal = x_ideal  # Ideal: predicted = actual
+        ax.plot(x_ideal, y_ideal, "r--", alpha=0.7, label="Ideal: loss_pred = actual_loss")
 
         ax.legend()
         ax.grid(True, alpha=0.3)
@@ -446,38 +425,32 @@ def _plot_calibration_scatter(results: ConfidenceExperimentResults, ax: Axes):
             va="center",
             transform=ax.transAxes,
         )
-        ax.set_title("Confidence Calibration Scatter")
+        ax.set_title("Loss Prediction Calibration Scatter")
 
 
 def _plot_binned_calibration(results: ConfidenceExperimentResults, ax: Axes):
     """Plot binned calibration curve."""
-    confidence_predictions = []
+    loss_predictions = []
     actual_future_losses = []
 
     for seed, result_list in results.confidence_model_results.items():
         for result in result_list:
-            if result.confidence_predictions and result.actual_future_losses:
-                min_len = min(
-                    len(result.confidence_predictions), len(result.actual_future_losses)
-                )
-                confidence_predictions.extend(result.confidence_predictions[:min_len])
+            if result.loss_predictions and result.actual_future_losses:
+                min_len = min(len(result.loss_predictions), len(result.actual_future_losses))
+                loss_predictions.extend(result.loss_predictions[:min_len])
                 actual_future_losses.extend(result.actual_future_losses[:min_len])
 
-    if confidence_predictions and actual_future_losses:
+    if loss_predictions and actual_future_losses:
         # Bin the data
         n_bins = 10
-        bins = np.linspace(
-            min(confidence_predictions), max(confidence_predictions), n_bins + 1
-        )
+        bins = np.linspace(min(loss_predictions), max(loss_predictions), n_bins + 1)
 
         bin_centers = []
         bin_avg_losses = []
         bin_std_losses = []
 
         for i in range(n_bins):
-            mask = (np.array(confidence_predictions) >= bins[i]) & (
-                np.array(confidence_predictions) < bins[i + 1]
-            )
+            mask = (np.array(loss_predictions) >= bins[i]) & (np.array(loss_predictions) < bins[i + 1])
             if np.any(mask):
                 bin_data = np.array(actual_future_losses)[mask]
                 bin_centers.append((bins[i] + bins[i + 1]) / 2)
@@ -493,15 +466,15 @@ def _plot_binned_calibration(results: ConfidenceExperimentResults, ax: Axes):
                 capsize=5,
                 label="Binned Calibration",
             )
-            ax.set_xlabel("Predicted Confidence (binned)")
+            ax.set_xlabel("Predicted Loss (binned)")
             ax.set_ylabel("Average Actual Future Loss")
-            ax.set_title("Binned Calibration Curve")
+            ax.set_title("Binned Loss Prediction Curve")
             ax.grid(True, alpha=0.3)
             ax.set_ylim(0, 15)  # Cap y-axis at 15 for loss plots
 
             # Add ideal line
             x_ideal = np.linspace(min(bin_centers), max(bin_centers), 100)
-            y_ideal = 1.0 / (x_ideal + 1e-8)
+            y_ideal = x_ideal  # Ideal: predicted = actual
             ax.plot(x_ideal, y_ideal, "r--", alpha=0.7, label="Ideal")
             ax.legend()
     else:
@@ -513,4 +486,4 @@ def _plot_binned_calibration(results: ConfidenceExperimentResults, ax: Axes):
             va="center",
             transform=ax.transAxes,
         )
-        ax.set_title("Binned Calibration Curve")
+        ax.set_title("Binned Loss Prediction Curve")

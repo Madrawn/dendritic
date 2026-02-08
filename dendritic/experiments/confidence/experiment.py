@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """
 Confidence-aware GPT experiment implementation.
 
@@ -138,7 +139,7 @@ class ConfidenceAwareExperiment:
 
         Args:
             model: ConfidenceAwareGPT model
-            train_loader: DataLoader yielding (tokens_t, tokens_t_plus_1, tokens_t_plus_2)
+            train_loader: DataLoader yielding (tokens_t, tokens_t_plus_1)
             eval_loader: DataLoader for evaluation
             device: Device to train on
             seed: Random seed for reproducibility
@@ -173,7 +174,7 @@ class ConfidenceAwareExperiment:
 
         Args:
             model: Standard MiniGPT model
-            train_loader: DataLoader yielding (tokens_t, tokens_t_plus_1, tokens_t_plus_2)
+            train_loader: DataLoader yielding (tokens_t, tokens_t_plus_1)
             eval_loader: DataLoader for evaluation
             device: Device to train on
             seed: Random seed for reproducibility
@@ -203,13 +204,12 @@ class ConfidenceAwareExperiment:
         total_batches = 0
 
         with torch.no_grad():
-            for i, (tokens_t, tokens_t_plus_1, tokens_t_plus_2) in enumerate(eval_loader):
+            for i, (tokens_t, tokens_t_plus_1) in enumerate(eval_loader):
                 if i >= num_batches:
                     break
 
                 tokens_t = tokens_t.to(device)
                 tokens_t_plus_1 = tokens_t_plus_1.to(device)
-                tokens_t_plus_2 = tokens_t_plus_2.to(device)
 
                 # Initialize confidence
                 batch_size = tokens_t.shape[0]

@@ -1,12 +1,13 @@
+# ruff: noqa: PLR6301, PLR2004
+
 """
 Unit tests for confidence experiment data loader.
 """
 
 import pytest
 import torch
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from torch.utils.data import DataLoader, Dataset
-from transformers.tokenization_utils import PreTrainedTokenizer
 
 from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
 from dendritic.experiments.confidence.data_loader import (
@@ -15,7 +16,6 @@ from dendritic.experiments.confidence.data_loader import (
     _convert_to_confidence_loader,
     create_confidence_batch_from_sequences,
 )
-from dendritic.dataset_handlers.factory import get_handler
 from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
 
 
@@ -28,8 +28,8 @@ class SmallDataset(Dataset):
         return self.config.batch_size * 2  # Enough for 2 full batches
 
     def __getitem__(self, idx):
-        # Return sequences of length max_seq_len + 2 (for lookahead)
-        seq_len = self.config.max_seq_len + 2
+        # Return sequences of length max_seq_len + 1 (for lookahead)
+        seq_len = self.config.max_seq_len + 1
         return {
             "input_ids": torch.randint(0, 1000, (seq_len,)),
             "labels": torch.randint(0, 1000, (seq_len,)),
@@ -48,9 +48,7 @@ class SmallHandler:
             shuffle=True,
             drop_last=True,  # Ensure consistent batch sizes
         )
-        eval_loader = DataLoader(
-            dataset, batch_size=config.batch_size, shuffle=False, drop_last=True
-        )
+        eval_loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=False, drop_last=True)
         return {"train": train_loader, "eval": eval_loader}
 
 
@@ -75,16 +73,13 @@ class MockTokenizer:
         **kwargs,
     ):
         # Simple tokenization: return sequential IDs
-        import random
 
         if isinstance(texts, str):
             texts = [texts]
         tokenized = []
         for text in texts:
             # Generate random token IDs for testing
-            length = (
-                min(len(text.split()), max_length) if max_length else len(text.split())
-            )
+            length = min(len(text.split()), max_length) if max_length else len(text.split())
             tokens = list(range(100, 100 + length))
             tokenized.append(tokens)
 
@@ -93,9 +88,7 @@ class MockTokenizer:
                 try:
                     return self[attr]
                 except KeyError:
-                    raise AttributeError(
-                        f"'MockBatchEncoding' has no attribute '{attr}'"
-                    )
+                    raise AttributeError(f"'MockBatchEncoding' has no attribute '{attr}'")
 
         return MockBatchEncoding({"input_ids": tokenized})
 
@@ -110,9 +103,9 @@ class MockDataset(Dataset):
         return 10
 
     def __getitem__(self, idx):
-        # Return sequences of length seq_len + 2 (for lookahead)
-        input_ids = torch.randint(0, 1000, (self.seq_len + 2,))
-        labels = torch.randint(0, 1000, (self.seq_len + 2,))
+        # Return sequences of length seq_len + 1 (for lookahead)
+        input_ids = torch.randint(0, 1000, (self.seq_len + 1,))
+        labels = torch.randint(0, 1000, (self.seq_len + 1,))
         return {"input_ids": input_ids, "labels": labels}
 
 
@@ -170,15 +163,15 @@ def confidence_config():
 
 @pytest.mark.unit
 def test_create_modified_config(confidence_config):
-    """Test that _create_modified_config increases sequence length by 2."""
+    """Test that _create_modified_config increases sequence length by 1."""
     modified = _create_modified_config(confidence_config)
 
     # Should be a PretrainingConfig (not ConfidenceExperimentConfig)
     assert isinstance(modified, PretrainingConfig)
     assert not isinstance(modified, ConfidenceExperimentConfig)
 
-    # Sequence length should be increased by 2
-    assert modified.max_seq_len == confidence_config.max_seq_len + 2
+    # Sequence length should be increased by 1
+    assert modified.max_seq_len == confidence_config.max_seq_len + 1
 
     # Other fields should be copied
     assert modified.vocab_size == confidence_config.vocab_size
@@ -192,21 +185,18 @@ def test_create_confidence_batch_from_sequences():
     """Test the create_confidence_batch_from_sequences function."""
     batch_size = 3
     seq_len = 5
-    total_len = seq_len + 2
+    total_len = seq_len + 1
 
-    # Create input tensor of shape (batch_size, seq_len + 2)
+    # Create input tensor of shape (batch_size, seq_len + 1)
     input_ids = torch.randint(0, 1000, (batch_size, total_len))
 
-    # Extract triplets
-    tokens_t, tokens_t_plus_1, tokens_t_plus_2 = create_confidence_batch_from_sequences(
-        input_ids, seq_len
-    )
+    # Extract pairs
+    tokens_t, tokens_t_plus_1 = create_confidence_batch_from_sequences(input_ids, seq_len)
 
     # Check shapes
     assert tokens_t.shape == (batch_size, seq_len)
-    # tokens_t_plus_1 and tokens_t_plus_2 are single tokens (not sequences)
+    # tokens_t_plus_1 is a single token (not a sequence)
     assert tokens_t_plus_1.shape == (batch_size,)
-    assert tokens_t_plus_2.shape == (batch_size,)
 
     # Check content
     for i in range(batch_size):
@@ -214,8 +204,6 @@ def test_create_confidence_batch_from_sequences():
         assert torch.all(tokens_t[i] == input_ids[i, :seq_len])
         # tokens_t_plus_1 should be single token at position seq_len
         assert torch.all(tokens_t_plus_1[i] == input_ids[i, seq_len])
-        # tokens_t_plus_2 should be single token at position seq_len + 1
-        assert torch.all(tokens_t_plus_2[i] == input_ids[i, seq_len + 1])
 
 
 @pytest.mark.unit
@@ -226,9 +214,9 @@ def test_create_confidence_batch_from_sequences_errors():
         create_confidence_batch_from_sequences(torch.randn(3, 4, 5), seq_len=3)
 
     # Test with insufficient length
-    input_ids = torch.randint(0, 1000, (2, 4))  # length 4
-    with pytest.raises(ValueError, match="Sequence length 4 is less than required"):
-        create_confidence_batch_from_sequences(input_ids, seq_len=3)  # needs 3+2=5
+    input_ids = torch.randint(0, 1000, (2, 3))  # length 3
+    with pytest.raises(ValueError, match="Sequence length 3 is less than required"):
+        create_confidence_batch_from_sequences(input_ids, seq_len=3)  # needs 3+1=4
 
 
 @pytest.mark.unit
@@ -236,7 +224,7 @@ def test_convert_to_confidence_loader():
     """Test _convert_to_confidence_loader function."""
     batch_size = 2
     seq_len = 8
-    total_len = seq_len + 2
+    total_len = seq_len + 1
 
     # Create a mock dataloader that yields batches with input_ids
     class MockDataset(Dataset):
@@ -247,39 +235,31 @@ def test_convert_to_confidence_loader():
             return {"input_ids": torch.randint(0, 1000, (total_len,))}
 
     dataset = MockDataset()
-    original_loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True
-    )
+    original_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
 
     # Convert to confidence loader
-    confidence_loader = _convert_to_confidence_loader(
-        original_loader, seq_len, batch_size
-    )
+    confidence_loader = _convert_to_confidence_loader(original_loader, seq_len, batch_size)
 
-    # Check that we get triplets
+    # Check that we get pairs
     for batch in confidence_loader:
-        tokens_t, tokens_t_plus_1, tokens_t_plus_2 = batch
+        tokens_t, tokens_t_plus_1 = batch
 
         # Check shapes
         assert tokens_t.shape == (batch_size, seq_len)
-        # tokens_t_plus_1 and tokens_t_plus_2 are single tokens (not sequences)
+        # tokens_t_plus_1 is a single token (not a sequence)
         assert tokens_t_plus_1.shape == (batch_size,)
-        assert tokens_t_plus_2.shape == (batch_size,)
 
         # Check that they're properly shifted
         # Since we can't access the original input_ids after conversion,
         # we just verify the shapes and types
         assert isinstance(tokens_t, torch.Tensor)
         assert isinstance(tokens_t_plus_1, torch.Tensor)
-        assert isinstance(tokens_t_plus_2, torch.Tensor)
         break  # Just test first batch
 
 
 @pytest.mark.unit
 @patch("dendritic.experiments.confidence.data_loader.get_handler")
-def test_prepare_confidence_data_mock(
-    mock_get_handler, confidence_config, mock_tokenizer
-):
+def test_prepare_confidence_data_mock(mock_get_handler, confidence_config, mock_tokenizer):
     """Test prepare_confidence_data with mocked handler."""
     # Setup mock handler with mocked prepare_pretraining_dataloaders
     mock_handler = Mock(spec=MockDatasetHandler)
@@ -293,8 +273,8 @@ def test_prepare_confidence_data_mock(
             return 4
 
         def __getitem__(self, idx):
-            # Return sequences of length seq_len + 2
-            input_ids = torch.randint(0, 1000, (self.seq_len + 2,))
+            # Return sequences of length seq_len + 1
+            input_ids = torch.randint(0, 1000, (self.seq_len + 1,))
             return {"input_ids": input_ids}
 
     # Create real dataloaders with mock dataset
@@ -335,7 +315,7 @@ def test_prepare_confidence_data_mock(
     call_args = mock_get_handler.call_args
     assert call_args[0][0] == confidence_config.dataset
     assert call_args[0][1] == mock_tokenizer
-    assert call_args[1]["max_length"] == confidence_config.max_seq_len + 2
+    assert call_args[1]["max_length"] == confidence_config.max_seq_len + 1
     # max_samples should NOT be passed to get_handler, it should be passed to prepare_pretraining_dataloaders
     assert "max_samples" not in call_args[1]
 
@@ -348,40 +328,35 @@ def test_prepare_confidence_data_mock(
     assert isinstance(loaders["train"], DataLoader)
     assert isinstance(loaders["eval"], DataLoader)
 
-    # Check that confidence loaders yield triplets
+    # Check that confidence loaders yield pairs
     for loader_name, loader in loaders.items():
         for batch in loader:
-            tokens_t, tokens_t_plus_1, tokens_t_plus_2 = batch
+            tokens_t, tokens_t_plus_1 = batch
             assert tokens_t.shape == (
                 confidence_config.batch_size,
                 confidence_config.max_seq_len,
             )
-            # tokens_t_plus_1 and tokens_t_plus_2 are single tokens (not sequences)
+            # tokens_t_plus_1 is a single token (not a sequence)
             assert tokens_t_plus_1.shape == (confidence_config.batch_size,)
-            assert tokens_t_plus_2.shape == (confidence_config.batch_size,)
             break  # Just test first batch
 
 
 @pytest.mark.unit
 @patch("dendritic.experiments.confidence.data_loader.get_handler")
-def test_prepare_confidence_data_small_dataset(
-    mock_get_handler, confidence_config, mock_tokenizer
-):
+def test_prepare_confidence_data_small_dataset(mock_get_handler, confidence_config, mock_tokenizer):
     """Test prepare_confidence_data with small dataset."""
 
     mock_get_handler.return_value = SmallHandler()
 
     # This should work
-    loaders = prepare_confidence_data(
-        config=confidence_config, tokenizer=mock_tokenizer, num_workers=0
-    )
+    loaders = prepare_confidence_data(config=confidence_config, tokenizer=mock_tokenizer, num_workers=0)
 
     assert "train" in loaders
     assert "eval" in loaders
     # Check that loaders produce batches
     train_batch = next(iter(loaders["train"]))
     assert isinstance(train_batch, tuple)
-    assert len(train_batch) == 3
+    assert len(train_batch) == 2
 
 
 @pytest.mark.unit
@@ -392,26 +367,23 @@ def test_prepare_confidence_data_integration(confidence_config, mock_tokenizer):
         mock_handler = MockDatasetHandler(mock_tokenizer)
         mock_get.return_value = mock_handler
 
-        loaders = prepare_confidence_data(
-            config=confidence_config, tokenizer=mock_tokenizer, num_workers=0
-        )
+        loaders = prepare_confidence_data(config=confidence_config, tokenizer=mock_tokenizer, num_workers=0)
 
         # Verify the loaders produce the expected format
         train_loader = loaders["train"]
         first_batch = next(iter(train_loader))
 
-        # Should be a tuple of 3 tensors
+        # Should be a tuple of 2 tensors
         assert isinstance(first_batch, tuple)
-        assert len(first_batch) == 3
+        assert len(first_batch) == 2
 
-        tokens_t, tokens_t_plus_1, tokens_t_plus_2 = first_batch
+        tokens_t, tokens_t_plus_1 = first_batch
         assert tokens_t.shape == (
             confidence_config.batch_size,
             confidence_config.max_seq_len,
         )
-        # tokens_t_plus_1 and tokens_t_plus_2 are single tokens (not sequences)
+        # tokens_t_plus_1 is a single token (not a sequence)
         assert tokens_t_plus_1.shape == (confidence_config.batch_size,)
-        assert tokens_t_plus_2.shape == (confidence_config.batch_size,)
 
 
 @pytest.mark.unit
@@ -420,7 +392,7 @@ def test_confidence_dataset_wrapper():
     # This tests the internal class by calling _convert_to_confidence_loader
     batch_size = 2
     seq_len = 10
-    total_len = seq_len + 2
+    total_len = seq_len + 1
 
     # Create a simple dataloader
     class SimpleDataset(Dataset):
@@ -428,40 +400,28 @@ def test_confidence_dataset_wrapper():
             return 3
 
         def __getitem__(self, idx):
-            return {
-                "input_ids": torch.arange(
-                    idx * 100, idx * 100 + total_len, dtype=torch.long
-                )
-            }
+            return {"input_ids": torch.arange(idx * 100, idx * 100 + total_len, dtype=torch.long)}
 
     dataset = SimpleDataset()
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
     # Convert to confidence loader
-    confidence_loader = _convert_to_confidence_loader(
-        dataloader, seq_len, batch_size=1, shuffle=False
-    )
+    confidence_loader = _convert_to_confidence_loader(dataloader, seq_len, batch_size=1, shuffle=False)
 
     # Check all batches
-    for i, (tokens_t, tokens_t_plus_1, tokens_t_plus_2) in enumerate(confidence_loader):
-        # Each batch should have shape (1, seq_len) for tokens_t, single tokens for others
+    for i, (tokens_t, tokens_t_plus_1) in enumerate(confidence_loader):
+        # Each batch should have shape (1, seq_len) for tokens_t, single token for tokens_t_plus_1
         assert tokens_t.shape == (1, seq_len)
         assert tokens_t_plus_1.shape == (1,)
-        assert tokens_t_plus_2.shape == (1,)
 
         # Check shifting
         expected_start = i * 100
-        expected_t = torch.arange(
-            expected_start, expected_start + seq_len, dtype=torch.long
-        )
+        expected_t = torch.arange(expected_start, expected_start + seq_len, dtype=torch.long)
         # tokens_t_plus_1 is single token at position seq_len
         expected_t1 = torch.tensor([expected_start + seq_len], dtype=torch.long)
-        # tokens_t_plus_2 is single token at position seq_len + 1
-        expected_t2 = torch.tensor([expected_start + seq_len + 1], dtype=torch.long)
 
         assert torch.all(tokens_t[0] == expected_t)
         assert torch.all(tokens_t_plus_1[0] == expected_t1)
-        assert torch.all(tokens_t_plus_2[0] == expected_t2)
 
 
 if __name__ == "__main__":

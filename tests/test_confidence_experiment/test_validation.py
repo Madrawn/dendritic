@@ -1,14 +1,15 @@
+# ruff: noqa: PLR6301, PLR2004,E712
+
 """
 Tests for confidence experiment validation functions.
 """
 
 import pytest
 import torch
-import numpy as np
 from unittest.mock import Mock, patch
 from dendritic.experiments.confidence.validation import (
     compare_parameter_counts,
-    validate_confidence_predictions,
+    validate_loss_predictions,
     validate_experiment_results,
     generate_validation_report,
 )
@@ -61,14 +62,12 @@ class TestCompareParameterCounts:
         model.named_parameters.return_value = [
             ("tok_emb.weight", param1),
             ("head.weight", param2),
-            ("confidence_predictor.weight", param3),
+            ("loss_predictor.weight", param3),
         ]
         return model
 
     @pytest.mark.unit
-    def test_compare_parameter_counts_basic(
-        self, mock_standard_model, mock_confidence_model
-    ):
+    def test_compare_parameter_counts_basic(self, mock_standard_model, mock_confidence_model):
         """Test basic parameter count comparison."""
         result = compare_parameter_counts(mock_standard_model, mock_confidence_model)
 
@@ -82,7 +81,7 @@ class TestCompareParameterCounts:
         assert "standard_by_layer" in result
         assert "confidence_by_layer" in result
         assert result["standard_by_layer"]["tok_emb.weight"] == 1000
-        assert result["confidence_by_layer"]["confidence_predictor.weight"] == 500
+        assert result["confidence_by_layer"]["loss_predictor.weight"] == 500
 
         # Check fair comparison flag (less than 30% more params)
         assert result["is_fair_comparison"] == True  # 500/3000 = 16.7% < 30%
@@ -105,7 +104,7 @@ class TestCompareParameterCounts:
         conf_model.parameters.return_value = [conf_param1, conf_param2]
         conf_model.named_parameters.return_value = [
             ("layer.weight", conf_param1),
-            ("confidence_predictor.weight", conf_param2),
+            ("loss_predictor.weight", conf_param2),
         ]
 
         result = compare_parameter_counts(std_model, conf_model)
@@ -137,23 +136,23 @@ class TestCompareParameterCounts:
         assert result["is_fair_comparison"] == False  # inf > 30%
 
 
-class TestValidateConfidencePredictions:
-    """Test validate_confidence_predictions function."""
+class TestValidateLossPredictions:
+    """Test validate_loss_predictions function."""
 
     @pytest.fixture
     def mock_confidence_model(self):
         """Create a mock ConfidenceAwareGPT model."""
         model = Mock(spec=ConfidenceAwareGPT)
 
-        # Mock forward method to return confidence values
+        # Mock forward method to return loss prediction values
         # Updated to match new API: labels=None, confidence_scalars=None
         def mock_forward(input_ids, labels=None, confidence_scalars=None):
             batch_size, seq_len = input_ids.shape
-            # Create confidence values (raw linear outputs, not sigmoid)
-            # Range ~2-4 due to confidence_init_bias=2.0
-            confidence_pred = 2.0 + torch.randn(batch_size, seq_len) * 0.5
+            # Create loss prediction values (raw linear outputs)
+            # Range ~2-4 due to loss_init_bias=2.0
+            loss_pred = 2.0 + torch.randn(batch_size, seq_len) * 0.5
 
-            return {"confidence_pred": confidence_pred}
+            return {"loss_prediction": loss_pred}
 
         model.eval = Mock()
         model.return_value = Mock()
@@ -162,22 +161,20 @@ class TestValidateConfidencePredictions:
         return model
 
     @pytest.mark.unit
-    def test_validate_confidence_predictions_valid(self, mock_confidence_model):
-        """Test validation with valid confidence predictions."""
+    def test_validate_loss_predictions_valid(self, mock_confidence_model):
+        """Test validation with valid loss predictions."""
         # Create input tensors
         batch_size = 2
         seq_len = 10
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
         attention_mask = torch.ones_like(input_ids)
 
-        # Mock the model to return valid confidence values (around 2.0)
-        confidence = 2.0 + torch.randn(batch_size, seq_len) * 0.5  # Values around 2.0
-        mock_output = {"confidence_pred": confidence}
+        # Mock the model to return valid loss predictions (around 2.0)
+        loss_pred = 2.0 + torch.randn(batch_size, seq_len) * 0.5  # Values around 2.0
+        mock_output = {"loss_prediction": loss_pred}
 
         with patch.object(mock_confidence_model, "__call__", return_value=mock_output):
-            result = validate_confidence_predictions(
-                mock_confidence_model, input_ids, attention_mask, threshold=0.95
-            )
+            result = validate_loss_predictions(mock_confidence_model, input_ids, attention_mask, threshold=0.95)
 
         # Check result structure
         assert result["shape"] == (batch_size, seq_len)
@@ -199,59 +196,55 @@ class TestValidateConfidencePredictions:
         # Just check they're reasonable (not checking bounds)
 
     @pytest.mark.unit
-    def test_validate_confidence_predictions_nan(self):
+    def test_validate_loss_predictions_nan(self):
         """Test validation with NaN values."""
         batch_size = 2
         seq_len = 10
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
         attention_mask = torch.ones_like(input_ids)
 
-        # Create confidence with NaN
-        confidence = torch.ones(batch_size, seq_len)
-        confidence[0, 0] = torch.tensor(float("nan"))
+        # Create loss prediction with NaN
+        loss_pred = torch.ones(batch_size, seq_len)
+        loss_pred[0, 0] = torch.tensor(float("nan"))
 
-        # Create a mock model that returns our confidence
+        # Create a mock model that returns our loss prediction
         mock_model = Mock(spec=ConfidenceAwareGPT)
         mock_model.eval = Mock()
 
-        # Mock the __call__ method to return dict with confidence_pred
-        mock_output = {"confidence_pred": confidence}
+        # Mock the __call__ method to return dict with loss_prediction
+        mock_output = {"loss_prediction": loss_pred}
         mock_model.return_value = mock_output
 
-        result = validate_confidence_predictions(mock_model, input_ids, attention_mask)
+        result = validate_loss_predictions(mock_model, input_ids, attention_mask)
 
         assert result["has_nan"] == True
         assert result["passes_sanity_check"] == False
         assert result["is_valid"] == False
 
     @pytest.mark.unit
-    def test_validate_confidence_predictions_out_of_range(self, mock_confidence_model):
+    def test_validate_loss_predictions_out_of_range(self, mock_confidence_model):
         """Test validation with unreasonable mean/std values."""
         batch_size = 2
         seq_len = 10
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
         attention_mask = torch.ones_like(input_ids)
 
-        # Create confidence with unreasonable mean (far from 2.0)
+        # Create loss prediction with unreasonable mean (far from 2.0)
         # Mean = 50.0, which is > 10.0 away from 2.0
-        confidence = torch.tensor(
-            [
-                [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0],
-                [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0],
-            ]
-        )
+        loss_pred = torch.tensor([
+            [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0],
+            [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0],
+        ])
 
-        # Create a mock function that returns our confidence dict
+        # Create a mock function that returns our loss prediction dict
         def mock_call(input_ids, labels=None, confidence_scalars=None):
-            return {"confidence_pred": confidence}
+            return {"loss_prediction": loss_pred}
 
         # Clear side_effect and set our mock
         mock_confidence_model.side_effect = None
         mock_confidence_model.side_effect = mock_call
 
-        result = validate_confidence_predictions(
-            mock_confidence_model, input_ids, attention_mask, threshold=0.95
-        )
+        result = validate_loss_predictions(mock_confidence_model, input_ids, attention_mask, threshold=0.95)
 
         # Mean is 50.0, which is 48.0 away from 2.0 > 10.0 threshold
         assert result["passes_range_check"] == False
@@ -259,21 +252,19 @@ class TestValidateConfidencePredictions:
         assert abs(result["mean_value"] - 50.0) < 0.1  # Should be close to 50.0
 
     @pytest.mark.unit
-    def test_validate_confidence_predictions_shape_mismatch(
-        self, mock_confidence_model
-    ):
+    def test_validate_loss_predictions_shape_mismatch(self, mock_confidence_model):
         """Test validation with shape mismatch."""
         batch_size = 2
         seq_len = 10
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
         attention_mask = torch.ones_like(input_ids)
 
-        # Create confidence with wrong shape
-        confidence = torch.ones(batch_size, seq_len + 1)  # Wrong shape
+        # Create loss prediction with wrong shape
+        loss_pred = torch.ones(batch_size, seq_len + 1)  # Wrong shape
 
-        # Create a mock function that returns our confidence dict with wrong shape
+        # Create a mock function that returns our loss prediction dict with wrong shape
         def mock_call(input_ids, labels=None, confidence_scalars=None):
-            return {"confidence_pred": confidence}
+            return {"loss_prediction": loss_pred}
 
         # Clear side_effect and set our mock
         mock_confidence_model.side_effect = None
@@ -281,9 +272,7 @@ class TestValidateConfidencePredictions:
 
         # Should raise assertion error
         with pytest.raises(AssertionError, match="doesn't match input shape"):
-            validate_confidence_predictions(
-                mock_confidence_model, input_ids, attention_mask
-            )
+            validate_loss_predictions(mock_confidence_model, input_ids, attention_mask)
 
 
 class TestValidateExperimentResults:
@@ -334,7 +323,7 @@ class TestValidateExperimentResults:
             config={},
             confidence_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.5, 2.4, 2.3],
-            confidence_predictions=[0.1, 0.2, 0.3],
+            loss_predictions=[0.1, 0.2, 0.3],
             actual_future_losses=[2.6, 2.5, 2.4],
         )
 
@@ -389,10 +378,7 @@ class TestValidateExperimentResults:
         validation = validate_experiment_results(results, sample_config)
 
         assert validation["is_valid"] == False
-        assert any(
-            "Missing attribute: standard_model_results" in error
-            for error in validation["errors"]
-        )
+        assert any("Missing attribute: standard_model_results" in error for error in validation["errors"])
 
     @pytest.mark.unit
     def test_validate_experiment_results_seed_mismatch(self, sample_config):
@@ -442,9 +428,7 @@ class TestValidateExperimentResults:
 
         # Negative training time should be a warning
         assert validation["is_valid"] == True  # Still valid
-        assert any(
-            "training time is -1.0" in warning for warning in validation["warnings"]
-        )
+        assert any("training time is -1.0" in warning for warning in validation["warnings"])
 
     @pytest.mark.unit
     def test_validate_experiment_results_parameter_counts(self, sample_config):
@@ -461,9 +445,7 @@ class TestValidateExperimentResults:
         validation = validate_experiment_results(results, sample_config)
 
         assert validation["is_valid"] == False
-        assert any(
-            "should have more parameters" in error for error in validation["errors"]
-        )
+        assert any("should have more parameters" in error for error in validation["errors"])
 
         # Test 2: Confidence model has reasonable more parameters (pass)
         results.parameter_counts = {
@@ -483,9 +465,7 @@ class TestValidateExperimentResults:
         validation = validate_experiment_results(results, sample_config)
 
         assert validation["is_valid"] == True  # Still valid, just warning
-        assert any(
-            "Large parameter increase" in warning for warning in validation["warnings"]
-        )
+        assert any("Large parameter increase" in warning for warning in validation["warnings"])
 
 
 class TestGenerateValidationReport:

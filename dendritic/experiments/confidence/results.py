@@ -19,11 +19,11 @@ from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
 
 @dataclass
 class ConfidenceTrainingResult(TrainingResult):
-    """Extended training results with confidence metrics."""
+    """Extended training results with loss prediction metrics."""
 
-    confidence_loss_history: List[float] = field(default_factory=list)
+    confidence_loss_history: List[float] = field(default_factory=list)  # Kept for backward compatibility
     token_loss_history: List[float] = field(default_factory=list)
-    confidence_predictions: List[float] = field(default_factory=list)
+    loss_predictions: List[float] = field(default_factory=list)
     actual_future_losses: List[float] = field(default_factory=list)
 
 
@@ -60,20 +60,14 @@ class ConfidenceExperimentResults:
         standard_results = {}
         for seed, result_list in data.get("standard_model_results", {}).items():
             standard_results[seed] = [
-                TrainingResult(**result) if isinstance(result, dict) else result
-                for result in result_list
+                TrainingResult(**result) if isinstance(result, dict) else result for result in result_list
             ]
 
         # Reconstruct confidence model results
         confidence_results = {}
         for seed, result_list in data.get("confidence_model_results", {}).items():
             confidence_results[seed] = [
-                (
-                    ConfidenceTrainingResult(**result)
-                    if isinstance(result, dict)
-                    else result
-                )
-                for result in result_list
+                (ConfidenceTrainingResult(**result) if isinstance(result, dict) else result) for result in result_list
             ]
 
         # Reconstruct results
@@ -85,6 +79,10 @@ class ConfidenceExperimentResults:
             training_time=data.get("training_time", {}),
             parameter_counts=data.get("parameter_counts", {}),
         )
+
+
+# Backward compatibility alias
+ConfidenceTrainingResultWithPredictions = ConfidenceTrainingResult
 
 
 def save_results(

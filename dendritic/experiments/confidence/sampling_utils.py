@@ -52,10 +52,10 @@ def sample_tokens_from_model(
         config: Sampling configuration (SamplingConfig)
 
     Returns:
-        tuple: (generated_text, confidence_predictions, generated_token_ids, full_token_ids)
+        tuple: (generated_text, loss_predictions, generated_token_ids, full_token_ids)
         - generated_text: Generated text (including prompt)
-        - confidence_predictions: List of confidence predictions for each generated token,
-                                 or None if model is not ConfidenceAwareGPT
+        - loss_predictions: List of loss predictions for each generated token,
+                           or None if model is not ConfidenceAwareGPT
         - generated_token_ids: List of token IDs for generated tokens only
         - full_token_ids: Complete sequence of token IDs (prompt + generated)
     """
@@ -69,14 +69,14 @@ def sample_tokens_from_model(
     generated_token_ids = []
     full_token_ids = input_ids[0].tolist()  # Start with prompt token IDs
 
-    # Track confidence predictions if model is ConfidenceAwareGPT
-    is_confidence_model = hasattr(model, "confidence_predictor")
-    confidence_predictions_list = [] if is_confidence_model else None
+    # Track loss predictions if model is ConfidenceAwareGPT
+    is_confidence_model = hasattr(model, "loss_predictor")
+    loss_predictions_list = [] if is_confidence_model else None
 
-    # Initialize confidence scalars for the first step
+    # Initialize loss prediction scalars for the first step
     # For confidence models with config.use_confidence=False, we pass None (model uses zeros)
-    # For confidence models with config.use_confidence=True, we'll build confidence scalars as we generate
-    confidence_scalars = None
+    # For confidence models with config.use_confidence=True, we'll build loss prediction scalars as we generate
+    confidence_scalars = None  # This remains "confidence_scalars" as it's the input to the model
     model_max_len = model.max_seq_len
     current_len = input_ids.shape[1]
     effective_max_new_tokens = config.max_new_tokens
@@ -94,16 +94,16 @@ def sample_tokens_from_model(
             # Get model output
             logits, confidence_value = _get_model_logits(model, generated, is_confidence_model, confidence_scalars)
 
-            # Store confidence prediction if available
-            if confidence_value is not None and confidence_predictions_list is not None:
-                confidence_predictions_list.append(confidence_value)
+            # Store loss prediction if available
+            if confidence_value is not None and loss_predictions_list is not None:
+                loss_predictions_list.append(confidence_value)
 
             # Update confidence scalars for next iteration if using confidence model
             if is_confidence_model and config.use_confidence:
-                # confidence_predictions_list is guaranteed to be not None when is_confidence_model is True
-                assert confidence_predictions_list is not None
+                # loss_predictions_list is guaranteed to be not None when is_confidence_model is True
+                assert loss_predictions_list is not None
                 confidence_scalars = _update_confidence_scalars_after_append(
-                    confidence_predictions_list, generated.shape[1] + 1, config.device
+                    loss_predictions_list, generated.shape[1] + 1, config.device
                 )
 
             # Sample next token
@@ -122,7 +122,7 @@ def sample_tokens_from_model(
 
     # Decode the full sequence
     full_text = tokenizer.decode(generated[0], skip_special_tokens=True)
-    return full_text, confidence_predictions_list, generated_token_ids, full_token_ids
+    return full_text, loss_predictions_list, generated_token_ids, full_token_ids
 
 
 def _get_model_logits(
@@ -135,10 +135,10 @@ def _get_model_logits(
     if is_confidence_model:
         outputs = model(generated, confidence_scalars=confidence_scalars)
         logits = outputs["logits"]
-        confidence_pred = outputs["confidence_pred"]
+        loss_prediction = outputs["loss_prediction"]
         last_conf = None
-        if confidence_pred is not None:
-            last_conf = confidence_pred[:, -1].item()
+        if loss_prediction is not None:
+            last_conf = loss_prediction[:, -1].item()
         return logits, last_conf
     else:
         logits = model(generated)
@@ -146,15 +146,15 @@ def _get_model_logits(
 
 
 def _update_confidence_scalars_after_append(
-    confidence_predictions_list: list, next_seq_len: int, device: str
+    loss_predictions_list: list, next_seq_len: int, device: str
 ) -> torch.Tensor:
     """Update confidence scalars for the next forward pass after appending a token."""
     conf_tensor = torch.zeros((1, next_seq_len, 1), device=device, dtype=torch.float32)
 
-    if len(confidence_predictions_list) > 0:
-        fill_length = min(len(confidence_predictions_list), next_seq_len - 1)
+    if len(loss_predictions_list) > 0:
+        fill_length = min(len(loss_predictions_list), next_seq_len - 1)
         conf_tensor[0, 1 : 1 + fill_length, 0] = torch.tensor(
-            confidence_predictions_list[:fill_length], device=device, dtype=torch.float32
+            loss_predictions_list[:fill_length], device=device, dtype=torch.float32
         )
     return conf_tensor
 
@@ -184,34 +184,34 @@ def _sample_next_token(logits: torch.Tensor, temperature: float, top_p: float) -
 
 
 def format_tokens_with_confidence(
-    tokenizer, generated_token_ids: list[int], confidence_predictions: list[float], confidence_precision: int = 1
+    tokenizer, generated_token_ids: list[int], loss_predictions: list[float], confidence_precision: int = 1
 ) -> str:
     """
-    Format tokens with confidence scores in parentheses.
+    Format tokens with loss predictions in parentheses.
 
     Args:
         tokenizer: Tokenizer with decode method
         generated_token_ids: List of token IDs for generated tokens
-        confidence_predictions: List of confidence scores for each generated token
-        confidence_precision: Number of decimal places for confidence scores
+        loss_predictions: List of loss prediction values for each generated token
+        confidence_precision: Number of decimal places for loss predictions
 
     Returns:
         Formatted string like "token1(8.8) token2(7.1)"
     """
-    if len(generated_token_ids) != len(confidence_predictions):
+    if len(generated_token_ids) != len(loss_predictions):
         raise ValueError(
-            f"Token count ({len(generated_token_ids)}) doesn't match confidence count ({len(confidence_predictions)})"
+            f"Token count ({len(generated_token_ids)}) doesn't match loss prediction count ({len(loss_predictions)})"
         )
 
     formatted_parts = []
-    for token_id, confidence in zip(generated_token_ids, confidence_predictions):
+    for token_id, loss_pred in zip(generated_token_ids, loss_predictions):
         # Decode single token
         token_text = tokenizer.decode([token_id], skip_special_tokens=True)
         # Clean up whitespace (tokenizer.decode might add spaces)
         token_text = token_text.strip()
-        # Format with confidence
-        confidence_str = f"{confidence:.{confidence_precision}f}"
-        formatted_parts.append(f"{token_text}({confidence_str})")
+        # Format with loss prediction
+        loss_str = f"{loss_pred:.{confidence_precision}f}"
+        formatted_parts.append(f"{token_text}({loss_str})")
 
     return " ".join(formatted_parts)
 
@@ -236,13 +236,13 @@ def sample_model_output(
         config: Sampling configuration (SamplingConfig)
 
     Returns:
-        tuple: (generated_text, confidence_predictions, formatted_tokens_with_confidence)
+        tuple: (generated_text, loss_predictions, formatted_tokens_with_confidence)
         - generated_text: Generated text
-        - confidence_predictions: List of confidence predictions or None
-        - formatted_tokens_with_confidence: Formatted tokens with confidence scores or None
+        - loss_predictions: List of loss predictions or None
+        - formatted_tokens_with_confidence: Formatted tokens with loss predictions or None
     """
     try:
-        generated, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
+        generated, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
             model=model,
             tokenizer=tokenizer,
             prompt=prompt,
@@ -250,15 +250,15 @@ def sample_model_output(
         )
 
         formatted_tokens = None
-        if config.include_confidence_formatting and confidence_predictions is not None:
+        if config.include_confidence_formatting and loss_predictions is not None:
             formatted_tokens = format_tokens_with_confidence(
                 tokenizer=tokenizer,
                 generated_token_ids=generated_token_ids,
-                confidence_predictions=confidence_predictions,
+                loss_predictions=loss_predictions,
                 confidence_precision=1,
             )
 
-        return generated, confidence_predictions, formatted_tokens
+        return generated, loss_predictions, formatted_tokens
 
     except Exception as e:
         logger.error(f"Error during sampling: {e}")

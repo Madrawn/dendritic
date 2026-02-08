@@ -2,7 +2,7 @@
 Data loading utilities for confidence-aware GPT experiments.
 
 This module provides functions to prepare data for two-pass lookahead training,
-where we need tokens at positions t, t+1, and t+2.
+where we need tokens at positions t and t+1.
 """
 
 from typing import Dict, Any, Tuple, Optional
@@ -18,8 +18,8 @@ from .config import ConfidenceExperimentConfig
 class ConfidenceDataset(Dataset):
     """Dataset wrapper for confidence-aware training with lookahead.
 
-    Takes a standard DataLoader and extracts sequences of length seq_len + 2,
-    then provides triplets (tokens_t, tokens_t_plus_1, tokens_t_plus_2).
+    Takes a standard DataLoader and extracts sequences of length seq_len + 1,
+    then provides pairs (tokens_t, tokens_t_plus_1).
     """
 
     def __init__(self, dataloader: DataLoader, seq_len: int):
@@ -31,7 +31,7 @@ class ConfidenceDataset(Dataset):
         for batch in dataloader:
             input_ids = batch["input_ids"]
             # Ensure we have enough length
-            if input_ids.shape[1] >= seq_len + 2:
+            if input_ids.shape[1] >= seq_len + 1:
                 # Flatten batches into individual sequences
                 for i in range(input_ids.shape[0]):
                     self.sequences.append(input_ids[i])
@@ -40,15 +40,13 @@ class ConfidenceDataset(Dataset):
         return len(self.sequences)
 
     def __getitem__(self, idx):
-        input_ids = self.sequences[idx]  # Shape: (seq_len + 2,)
-        # Extract the three sequences
+        input_ids = self.sequences[idx]  # Shape: (seq_len + 1,)
+        # Extract the two sequences
         tokens_t = input_ids[: self.seq_len]
-        # For lookahead training, we need single tokens
-        # at positions seq_len and seq_len+1
+        # For lookahead training, we need a single token at position seq_len
         tokens_t_plus_1 = input_ids[self.seq_len]  # Single token
-        tokens_t_plus_2 = input_ids[self.seq_len + 1]  # Single token
 
-        return tokens_t, tokens_t_plus_1, tokens_t_plus_2
+        return tokens_t, tokens_t_plus_1
 
 
 def prepare_confidence_data(
@@ -61,8 +59,8 @@ def prepare_confidence_data(
     Prepare data for confidence-aware experiments with two-pass lookahead training.
 
     This function loads standard dataset using existing dataset handlers,
-    creates sequences of length `seq_len + 2` (where seq_len is the context window),
-    and returns batches with structure: `(tokens_t, tokens_t_plus_1, tokens_t_plus_2)`.
+    creates sequences of length `seq_len + 1` (where seq_len is the context window),
+    and returns batches with structure: `(tokens_t, tokens_t_plus_1)`.
 
     Parameters
     ----------
@@ -79,15 +77,15 @@ def prepare_confidence_data(
     -------
     dict[str, DataLoader]
         Dictionary with 'train' and 'eval' DataLoaders. Each batch from the DataLoader
-        is a tuple of three tensors: (tokens_t, tokens_t_plus_1, tokens_t_plus_2).
+        is a tuple of two tensors: (tokens_t, tokens_t_plus_1).
 
     Notes
     -----
     - The standard dataset handler returns sequences of length `max_seq_len` with
       labels shifted by 1 position for next-token prediction.
-    - For confidence training, we need sequences of length `max_seq_len + 2` to
-      have tokens at t, t+1, and t+2 positions.
-    - This function adapts the existing data loading to produce the required triplets.
+    - For confidence training, we need sequences of length `max_seq_len + 1` to
+      have tokens at t and t+1 positions.
+    - This function adapts the existing data loading to produce the required pairs.
     """
     if dataset_kwargs is None:
         dataset_kwargs = {}
@@ -96,7 +94,7 @@ def prepare_confidence_data(
     handler = get_handler(
         config.dataset,
         tokenizer,
-        max_length=config.max_seq_len + 2,  # Need extra tokens for lookahead
+        max_length=config.max_seq_len + 1,  # Need one extra token for lookahead
     )
 
     # Prepare standard dataloaders using the handler
@@ -125,8 +123,8 @@ def _create_modified_config(config: ConfidenceExperimentConfig) -> PretrainingCo
     """
     Create a modified config with increased sequence length for lookahead.
 
-    The confidence experiment needs sequences of length max_seq_len + 2
-    to have tokens at t, t+1, and t+2 positions.
+    The confidence experiment needs sequences of length max_seq_len + 1
+    to have tokens at t and t+1 positions.
     """
     # Create a copy of the config with modified max_seq_len
     # We need to be careful not to modify the original config
@@ -136,7 +134,7 @@ def _create_modified_config(config: ConfidenceExperimentConfig) -> PretrainingCo
         embed_dim=config.embed_dim,
         num_heads=config.num_heads,
         num_layers=config.num_layers,
-        max_seq_len=config.max_seq_len + 2,  # Add 2 for lookahead
+        max_seq_len=config.max_seq_len + 1,  # Add 1 for lookahead
         dropout=config.dropout,
         layer_type=config.layer_type,
         poly_rank=config.poly_rank,
@@ -172,13 +170,12 @@ def _create_modified_config(config: ConfidenceExperimentConfig) -> PretrainingCo
 
 
 def confidence_collate_fn(batch):
-    """Collate function that returns a tuple of three tensors."""
-    # batch is a list of tuples: [(tokens_t1, tokens_t_plus_11, tokens_t_plus_21), ...]
+    """Collate function that returns a tuple of two tensors."""
+    # batch is a list of tuples: [(tokens_t1, tokens_t_plus_11), ...]
     # We need to stack each component separately
     tokens_t_batch = torch.stack([item[0] for item in batch])
     tokens_t_plus_1_batch = torch.stack([item[1] for item in batch])
-    tokens_t_plus_2_batch = torch.stack([item[2] for item in batch])
-    return (tokens_t_batch, tokens_t_plus_1_batch, tokens_t_plus_2_batch)
+    return (tokens_t_batch, tokens_t_plus_1_batch)
 
 
 def _convert_to_confidence_loader(
@@ -188,15 +185,14 @@ def _convert_to_confidence_loader(
     shuffle: bool = True,
 ) -> DataLoader:
     """
-    Convert a standard dataloader to produce confidence training triplets.
+    Convert a standard dataloader to produce confidence training pairs.
 
-    Standard batches have shape (batch_size, seq_len + 2) for input_ids.
+    Standard batches have shape (batch_size, seq_len + 1) for input_ids.
     We need to extract:
     - tokens_t: input_ids[:, :seq_len] (first seq_len tokens)
-    - tokens_t_plus_1: input_ids[:, 1:seq_len+1] (shift by 1)
-    - tokens_t_plus_2: input_ids[:, 2:seq_len+2] (shift by 2)
+    - tokens_t_plus_1: input_ids[:, seq_len] (single token at position seq_len)
 
-    Returns a new DataLoader that yields tuples of these three tensors.
+    Returns a new DataLoader that yields tuples of these two tensors.
     """
 
     # Create the dataset using the module-level class
@@ -218,34 +214,30 @@ def _convert_to_confidence_loader(
 def create_confidence_batch_from_sequences(
     input_ids: torch.Tensor,
     seq_len: int,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Create confidence training triplets from a batch of sequences.
+    Create confidence training pairs from a batch of sequences.
 
     Parameters
     ----------
     input_ids : torch.Tensor
-        Tensor of shape (batch_size, seq_len + 2) containing token IDs.
+        Tensor of shape (batch_size, seq_len + 1) containing token IDs.
     seq_len : int
         The context window size (original sequence length).
 
     Returns
     -------
-    tuple of three torch.Tensor
+    tuple of two torch.Tensor
         tokens_t: shape (batch_size, seq_len)
         tokens_t_plus_1: shape (batch_size,) - single token at position seq_len
-        tokens_t_plus_2: shape (batch_size,) - single token at position seq_len + 1
     """
     if input_ids.dim() != 2:
         raise ValueError(f"Expected 2D tensor, got shape {input_ids.shape}")
 
-    if input_ids.shape[1] < seq_len + 2:
-        raise ValueError(
-            f"Sequence length {input_ids.shape[1]} is less than required {seq_len + 2}"
-        )
+    if input_ids.shape[1] < seq_len + 1:
+        raise ValueError(f"Sequence length {input_ids.shape[1]} is less than required {seq_len + 1}")
 
     tokens_t = input_ids[:, :seq_len]
     tokens_t_plus_1 = input_ids[:, seq_len]  # Single token at position seq_len
-    tokens_t_plus_2 = input_ids[:, seq_len + 1]  # Single token at position seq_len + 1
 
-    return tokens_t, tokens_t_plus_1, tokens_t_plus_2
+    return tokens_t, tokens_t_plus_1

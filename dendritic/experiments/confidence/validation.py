@@ -11,9 +11,7 @@ from typing import Dict, Tuple, Any
 from dendritic.experiments.models.MiniGPT import MiniGPT, ConfidenceAwareGPT
 
 
-def compare_parameter_counts(
-    standard_model: MiniGPT, confidence_model: ConfidenceAwareGPT
-) -> Dict[str, Any]:
+def compare_parameter_counts(standard_model: MiniGPT, confidence_model: ConfidenceAwareGPT) -> Dict[str, Any]:
     """
     Compare parameter counts between standard and confidence models.
 
@@ -53,14 +51,14 @@ def compare_parameter_counts(
     }
 
 
-def validate_confidence_predictions(
+def validate_loss_predictions(
     confidence_model: ConfidenceAwareGPT,
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
     threshold: float = 0.95,
 ) -> Dict[str, Any]:
     """
-    Validate that confidence predictions are within reasonable bounds.
+    Validate that loss predictions are within reasonable bounds.
 
     Args:
         confidence_model: ConfidenceAwareGPT model
@@ -80,32 +78,32 @@ def validate_confidence_predictions(
             confidence_scalars=None,  # Default confidence
         )
 
-    confidence = output["confidence_pred"]
+    loss_pred = output["loss_prediction"]
 
     # Basic shape validation
     batch_size, seq_len = input_ids.shape
-    assert confidence.shape == (batch_size, seq_len), (
-        f"Confidence shape {confidence.shape} doesn't match input shape {(batch_size, seq_len)}"
+    assert loss_pred.shape == (batch_size, seq_len), (
+        f"Loss prediction shape {loss_pred.shape} doesn't match input shape {(batch_size, seq_len)}"
     )
 
     # Check for NaN or infinite values
-    has_nan = torch.any(torch.isnan(confidence))
-    has_inf = torch.any(torch.isinf(confidence))
+    has_nan = torch.any(torch.isnan(loss_pred))
+    has_inf = torch.any(torch.isinf(loss_pred))
 
-    # Check value range - confidence values are raw predictions, not sigmoid outputs
+    # Check value range - loss predictions are raw values, not bounded
     # They can be any real number, but we check for reasonable bounds
     # Initial bias is set to 2.0, so values around that are expected
-    mean_val = confidence.mean().item()
-    std_val = confidence.std().item()
+    mean_val = loss_pred.mean().item()
+    std_val = loss_pred.std().item()
 
     # Calculate statistics
-    confidence_np = confidence.cpu().numpy()
+    loss_pred_np = loss_pred.cpu().numpy()
     stats = {
-        "mean": float(np.mean(confidence_np)),
-        "std": float(np.std(confidence_np)),
-        "min": float(np.min(confidence_np)),
-        "max": float(np.max(confidence_np)),
-        "median": float(np.median(confidence_np)),
+        "mean": float(np.mean(loss_pred_np)),
+        "std": float(np.std(loss_pred_np)),
+        "min": float(np.min(loss_pred_np)),
+        "max": float(np.max(loss_pred_np)),
+        "median": float(np.median(loss_pred_np)),
     }
 
     # Determine if validation passes
@@ -116,7 +114,7 @@ def validate_confidence_predictions(
     passes_sanity_check = not (has_nan or has_inf)
 
     return {
-        "shape": confidence.shape,
+        "shape": loss_pred.shape,
         "has_nan": bool(has_nan),
         "has_inf": bool(has_inf),
         "mean_value": mean_val,
@@ -166,18 +164,14 @@ def validate_experiment_results(
             validation_results["errors"].append(f"Missing attribute: {attr}")
 
     # Check 2: All seeds have results
-    if hasattr(results, "standard_model_results") and hasattr(
-        results, "confidence_model_results"
-    ):
+    if hasattr(results, "standard_model_results") and hasattr(results, "confidence_model_results"):
         std_seeds = set(results.standard_model_results.keys())
         conf_seeds = set(results.confidence_model_results.keys())
 
         if std_seeds == conf_seeds:
             validation_results["checks_passed"].append("seed_consistency")
         else:
-            validation_results["errors"].append(
-                f"Seed mismatch: standard={std_seeds}, confidence={conf_seeds}"
-            )
+            validation_results["errors"].append(f"Seed mismatch: standard={std_seeds}, confidence={conf_seeds}")
 
         # Check if all config seeds are present
         config_seeds = set(str(seed) for seed in config.seeds)
@@ -195,13 +189,9 @@ def validate_experiment_results(
             if model_type in training_time:
                 time_val = training_time[model_type]
                 if time_val > 0:
-                    validation_results["checks_passed"].append(
-                        f"{model_type}_training_time_positive"
-                    )
+                    validation_results["checks_passed"].append(f"{model_type}_training_time_positive")
                 else:
-                    validation_results["warnings"].append(
-                        f"{model_type} training time is {time_val}"
-                    )
+                    validation_results["warnings"].append(f"{model_type} training time is {time_val}")
 
     # Check 4: Parameter counts are reasonable
     if hasattr(results, "parameter_counts"):
@@ -216,17 +206,11 @@ def validate_experiment_results(
                 # Check relative difference
                 rel_diff = (conf_params - std_params) / std_params
                 if rel_diff < 0.3:  # Less than 30% more parameters
-                    validation_results["checks_passed"].append(
-                        "reasonable_param_increase"
-                    )
+                    validation_results["checks_passed"].append("reasonable_param_increase")
                 else:
-                    validation_results["warnings"].append(
-                        f"Large parameter increase: {rel_diff:.1%}"
-                    )
+                    validation_results["warnings"].append(f"Large parameter increase: {rel_diff:.1%}")
             else:
-                validation_results["errors"].append(
-                    "Confidence model should have more parameters than standard model"
-                )
+                validation_results["errors"].append("Confidence model should have more parameters than standard model")
 
     # Determine overall validity
     is_valid = len(validation_results["errors"]) == 0
@@ -235,9 +219,7 @@ def validate_experiment_results(
     return validation_results
 
 
-def generate_validation_report(
-    validation_results: Dict[str, Any], verbose: bool = True
-) -> str:
+def generate_validation_report(validation_results: Dict[str, Any], verbose: bool = True) -> str:
     """
     Generate a human-readable validation report.
 
