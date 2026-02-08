@@ -13,6 +13,7 @@ import numpy as np
 from pathlib import Path
 
 from dendritic.experiments.models.MiniGPT import MiniGPT, ConfidenceAwareGPT
+from dendritic.experiments.models.ModelConfig import ModelConfig
 from dendritic.experiments.utils.TrainingResult import TrainingResult
 from dendritic.experiments.utils.param_utils import find_matching_hidden_dims
 from dendritic.experiments.utils.loss_utils import (
@@ -80,8 +81,8 @@ class ConfidenceAwareExperiment:
         # Get matching hidden dimensions
         baseline_hidden, dendritic_hidden = find_matching_hidden_dims(self.config)
 
-        # Create standard MiniGPT
-        standard_model = MiniGPT(
+        # Create standard MiniGPT with ModelConfig
+        standard_config = ModelConfig(
             vocab_size=self.config.vocab_size,
             embed_dim=self.config.embed_dim,
             num_heads=self.config.num_heads,
@@ -90,21 +91,26 @@ class ConfidenceAwareExperiment:
             hidden_dim=baseline_hidden,
             mlp_type="standard",
             dropout=self.config.dropout,
+            poly_rank=16,
+            poly_degree=3,
         )
+        standard_model = MiniGPT(standard_config)
 
-        # Create ConfidenceAwareGPT
+        # Create ConfidenceAwareGPT with ModelConfig
         # Confidence model uses same sequence length as standard model
-        confidence_max_seq_len = self.config.max_seq_len
-        confidence_model = ConfidenceAwareGPT(
+        confidence_config = ModelConfig(
             vocab_size=self.config.vocab_size,
             embed_dim=self.config.embed_dim,
             num_heads=self.config.num_heads,
             num_layers=self.config.num_layers,
-            max_seq_len=confidence_max_seq_len,
+            max_seq_len=self.config.max_seq_len,
             hidden_dim=baseline_hidden,  # Use same hidden dim for fair comparison
             mlp_type="standard",  # ConfidenceAwareGPT uses MetaAwareBlock internally
             dropout=self.config.dropout,
+            poly_rank=16,
+            poly_degree=3,
         )
+        confidence_model = ConfidenceAwareGPT(confidence_config)
 
         # Log parameter counts
         std_params = sum(p.numel() for p in standard_model.parameters())

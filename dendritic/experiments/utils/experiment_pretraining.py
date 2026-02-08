@@ -33,6 +33,7 @@ from dendritic.experiments.analysis.analysis import (
     analyze_results,
 )
 from dendritic.experiments.models.MiniGPT import MiniGPT
+from dendritic.experiments.models.ModelConfig import ModelConfig
 
 from .PretrainingConfig import PretrainingConfig, CohortSchedulerConfig
 from .experiment_utils import set_random_seed
@@ -115,7 +116,8 @@ class PretrainingExperiment:
         """
         baseline_hidden, dendritic_hidden = find_matching_hidden_dims(self.config)
         hidden_dim = {"standard": baseline_hidden, "dendritic": dendritic_hidden}[mlp_type]
-        return MiniGPT(
+        # Build model config
+        model_config = ModelConfig(
             vocab_size=self.config.vocab_size,
             embed_dim=self.config.embed_dim,
             num_heads=self.config.num_heads,
@@ -124,8 +126,10 @@ class PretrainingExperiment:
             hidden_dim=hidden_dim,
             mlp_type=mlp_type,
             dropout=dropout,
-            **({} if poly_rank is None else {"poly_rank": poly_rank}),
+            poly_rank=poly_rank if poly_rank is not None else 16,
+            poly_degree=3,
         )
+        return MiniGPT(model_config)
 
     # Remove duplicate _build_model (the class method is already defined)
 

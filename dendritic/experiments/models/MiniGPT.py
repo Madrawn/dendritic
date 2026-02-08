@@ -1,9 +1,10 @@
-from typing import Literal
+from typing import Any
 
-from .MetaAwareBlock import AdaptiveMetaAwareBlock as MetaAwareBlock
+from .MetaAwareBlock import AdaptiveMetaAwareBlock
 from .BaselineMLP import BaselineMLP
 from .DendriticPretrainingMLP import DendriticPretrainingMLP
 from .TransformerBlock import TransformerBlock
+from .ModelConfig import ModelConfig
 from dendritic.experiments.utils.loss_utils import (
     compute_confidence_loss,
     compute_sequence_language_modeling_loss,
@@ -15,50 +16,45 @@ from torch import nn
 
 
 class BaseGPT(nn.Module):
-    def __init__(
-        self,
-        vocab_size: int,
-        embed_dim: int,
-        num_heads: int,
-        num_layers: int,
-        max_seq_len: int,
-        hidden_dim: int,
-        mlp_type: Literal["standard", "dendritic"] = "standard",  # "standard", "dendritic", or "dendritic_stack"
-        poly_rank: int = 16,
-        poly_degree: int = 3,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, config: ModelConfig | None = None, **kwargs: Any) -> None:
+        # Backward compatibility: accept individual parameters via kwargs
+        if config is None:
+            # Filter kwargs to only those that are valid ModelConfig fields
+            valid_fields = set(ModelConfig.__annotations__.keys())
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
+            config = ModelConfig(**filtered_kwargs)
+
         super().__init__()
-        self.embed_dim = embed_dim
-        self.max_seq_len = max_seq_len
-        self.num_layers = num_layers
+        self.embed_dim = config.embed_dim
+        self.max_seq_len = config.max_seq_len
+        self.num_layers = config.num_layers
         # Embeddings
-        self.tok_emb = nn.Embedding(vocab_size, embed_dim)
-        self.pos_emb = nn.Embedding(max_seq_len, embed_dim)
-        self.drop = nn.Dropout(dropout)
+        self.tok_emb = nn.Embedding(config.vocab_size, config.embed_dim)
+        self.pos_emb = nn.Embedding(config.max_seq_len, config.embed_dim)
+        self.drop = nn.Dropout(config.dropout)
 
         # Transformer blocks
         self.blocks = nn.ModuleList()
-        for _ in range(num_layers):
-            if mlp_type == "standard":
-                mlp = BaselineMLP(embed_dim, hidden_dim, dropout)
-            elif mlp_type == "dendritic":
+        for _ in range(self.num_layers):
+            if config.mlp_type == "standard":
+                mlp = BaselineMLP(config.embed_dim, config.hidden_dim, config.dropout)
+            elif config.mlp_type == "dendritic":
                 mlp = DendriticPretrainingMLP(
-                    embed_dim=embed_dim,
-                    hidden_dim=hidden_dim,
-                    poly_rank=poly_rank,
-                    poly_degree=poly_degree,
-                    dropout=dropout,
+                    embed_dim=config.embed_dim,
+                    hidden_dim=config.hidden_dim,
+                    poly_rank=config.poly_rank,
+                    poly_degree=config.poly_degree,
+                    dropout=config.dropout,
                 )
             else:
-                raise ValueError(f"Unknown mlp_type: {mlp_type}")
+                raise ValueError(f"Unknown mlp_type: {config.mlp_type}")
 
-            block = self.create_transformer_block(embed_dim, num_heads, dropout, mlp)
+            block = self.create_transformer_block(config.embed_dim, config.num_heads, config.dropout, mlp)
             self.blocks.append(block)
 
         # Output
-        self.ln_f = nn.LayerNorm(embed_dim)
-        self.head = nn.Linear(embed_dim, vocab_size, bias=False)
+        self.ln_f = nn.LayerNorm(config.embed_dim)
+        self.head = nn.Linear(config.embed_dim, config.vocab_size, bias=False)
 
         # Weight tying
         self.head.weight = self.tok_emb.weight
@@ -67,7 +63,7 @@ class BaseGPT(nn.Module):
         # Create causal mask and register as buffer to ensure proper device placement
         self.register_buffer(
             "causal_mask",
-            torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool(),
+            torch.triu(torch.ones(config.max_seq_len, config.max_seq_len), diagonal=1).bool(),
         )
 
         self._init_weights()
@@ -171,9 +167,9 @@ class ConfidenceAwareGPT(BaseGPT):
         nn.init.constant_(self.confidence_predictor.bias, 2.0)
 
     @staticmethod
-    def create_transformer_block(embed_dim, num_heads, dropout, mlp) -> MetaAwareBlock:
+    def create_transformer_block(embed_dim, num_heads, dropout, mlp) -> AdaptiveMetaAwareBlock:
         # Use the custom block with AdaptiveLayer
-        return MetaAwareBlock(embed_dim, num_heads, mlp, dropout)
+        return AdaptiveMetaAwareBlock(embed_dim, num_heads, mlp, dropout)
 
     def forward(  # type: ignore[override]
         self,
