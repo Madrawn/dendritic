@@ -1,28 +1,20 @@
 from typing import Literal
+
 from .MetaAwareBlock import AdaptiveMetaAwareBlock as MetaAwareBlock
 from .BaselineMLP import BaselineMLP
 from .DendriticPretrainingMLP import DendriticPretrainingMLP
-from .DendriticStackPretrainingMLP import DendriticStackPretrainingMLP
 from .TransformerBlock import TransformerBlock
 from dendritic.experiments.utils.loss_utils import (
-    compute_language_modeling_loss,
     compute_confidence_loss,
     compute_sequence_language_modeling_loss,
 )
-import torch.nn.functional as F
 
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
-class MiniGPT(nn.Module):
-    """
-    Minimal GPT for pretraining .
-
-    Supports baseline, dendritic, and dendritic_stack MLP variants.
-    """
-
+class BaseGPT(nn.Module):
     def __init__(
         self,
         vocab_size: int,
@@ -80,7 +72,8 @@ class MiniGPT(nn.Module):
 
         self._init_weights()
 
-    def create_transformer_block(self, embed_dim, num_heads, dropout, mlp) -> nn.Module:
+    @staticmethod
+    def create_transformer_block(embed_dim, num_heads, dropout, mlp) -> nn.Module:
         return TransformerBlock(embed_dim, num_heads, mlp, dropout)
 
     def _init_weights(self):
@@ -91,30 +84,6 @@ class MiniGPT(nn.Module):
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass of the MiniGPT model.
-
-        Args:
-            input_ids: Tensor of shape [batch_size, seq_len] with token indices
-
-        Returns:
-            Logits tensor of shape [batch_size, seq_len, vocab_size]
-        """
-        B, T = input_ids.shape
-
-        # Embeddings
-        x, mask = self.embed_input_sequence(input_ids, T)
-
-        # Transformer blocks
-        x, _ = self.forward_through_blocks(x, mask)
-
-        # Final normalization and projection
-        x = self.ln_f(x)
-        logits = self.head(x)
-
-        return logits
 
     def get_logits(self, input_ids: torch.Tensor) -> torch.Tensor:
         """
@@ -148,7 +117,39 @@ class MiniGPT(nn.Module):
         return x, mask
 
 
-class ConfidenceAwareGPT(MiniGPT):
+class MiniGPT(BaseGPT):
+    """
+    Minimal GPT for pretraining .
+
+    Supports baseline, dendritic, and dendritic_stack MLP variants.
+    """
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the MiniGPT model.
+
+        Args:
+            input_ids: Tensor of shape [batch_size, seq_len] with token indices
+
+        Returns:
+            Logits tensor of shape [batch_size, seq_len, vocab_size]
+        """
+        B, T = input_ids.shape
+
+        # Embeddings
+        x, mask = self.embed_input_sequence(input_ids, T)
+
+        # Transformer blocks
+        x, _ = self.forward_through_blocks(x, mask)
+
+        # Final normalization and projection
+        x = self.ln_f(x)
+        logits = self.head(x)
+
+        return logits
+
+
+class ConfidenceAwareGPT(BaseGPT):
     """
     GPT model that uses MetaAwareBlock transformer blocks,
     incorporating confidence scalars into computations, and predicts
@@ -169,11 +170,12 @@ class ConfidenceAwareGPT(MiniGPT):
         # Prevents initial "zero loss" predictions which cause instability
         nn.init.constant_(self.confidence_predictor.bias, 2.0)
 
-    def create_transformer_block(self, embed_dim, num_heads, dropout, mlp) -> MetaAwareBlock:
+    @staticmethod
+    def create_transformer_block(embed_dim, num_heads, dropout, mlp) -> MetaAwareBlock:
         # Use the custom block with AdaptiveLayer
         return MetaAwareBlock(embed_dim, num_heads, mlp, dropout)
 
-    def forward(
+    def forward(  # type: ignore[override]
         self,
         input_ids: torch.Tensor,
         confidence_scalars: torch.Tensor | None = None,
