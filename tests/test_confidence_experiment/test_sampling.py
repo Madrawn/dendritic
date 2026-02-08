@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from dendritic.experiments.confidence.sampling_utils import (
     sample_tokens_from_model,
     sample_model_output,
+    SamplingConfig,
 )
 
 
@@ -97,14 +98,12 @@ def test_sample_tokens_from_model_minigpt():
     tokenizer = MockTokenizer()
 
     # Test basic sampling
+    config = SamplingConfig(device="cpu", max_new_tokens=5)
     text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        max_new_tokens=5,
-        temperature=1.0,
-        top_p=0.95,
-        device="cpu",
+        config=config,
     )
 
     assert isinstance(text, str)
@@ -119,14 +118,12 @@ def test_sample_tokens_from_model_confidence_aware():
     tokenizer = MockTokenizer()
 
     # Test basic sampling
+    config = SamplingConfig(device="cpu", max_new_tokens=5)
     text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        max_new_tokens=5,
-        temperature=1.0,
-        top_p=0.95,
-        device="cpu",
+        config=config,
     )
 
     assert isinstance(text, str)
@@ -142,14 +139,12 @@ def test_sample_tokens_from_model_top_p_sampling():
     tokenizer = MockTokenizer()
 
     # Test with top_p < 1.0
+    config = SamplingConfig(device="cpu", max_new_tokens=5, temperature=0.8, top_p=0.9)
     text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        max_new_tokens=5,
-        temperature=0.8,
-        top_p=0.9,
-        device="cpu",
+        config=config,
     )
 
     assert isinstance(text, str)
@@ -163,24 +158,20 @@ def test_sample_tokens_from_model_temperature():
     tokenizer = MockTokenizer()
 
     # Test with different temperatures
+    config_low = SamplingConfig(device="cpu", max_new_tokens=5, temperature=0.5)
     text_low_temp, conf_low, generated_token_ids_low, full_token_ids_low = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        max_new_tokens=5,
-        temperature=0.5,
-        top_p=0.95,
-        device="cpu",
+        config=config_low,
     )
 
+    config_high = SamplingConfig(device="cpu", max_new_tokens=5, temperature=1.5)
     text_high_temp, conf_high, generated_token_ids_high, full_token_ids_high = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        max_new_tokens=5,
-        temperature=1.5,
-        top_p=0.95,
-        device="cpu",
+        config=config_high,
     )
 
     assert isinstance(text_low_temp, str)
@@ -197,11 +188,12 @@ def test_sample_model_output_error_handling():
 
     # Mock an error during sampling
     with patch.object(model, "forward", side_effect=RuntimeError("Test error")):
+        config = SamplingConfig(device="cpu")
         text, confidence_predictions, formatted_tokens = sample_model_output(
             model=model,
             tokenizer=tokenizer,
             prompt="Test prompt",
-            device="cpu",
+            config=config,
         )
 
     assert "[Sampling error:" in text
@@ -228,14 +220,12 @@ def test_sample_tokens_from_model_eos_stopping():
     tokenizer.decode = mock_decode
 
     try:
+        config = SamplingConfig(device="cpu", max_new_tokens=10)
         text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
             model=model,
             tokenizer=tokenizer,
             prompt="Test prompt",
-            max_new_tokens=10,
-            temperature=1.0,
-            top_p=0.95,
-            device="cpu",
+            config=config,
         )
         assert isinstance(text, str)
         assert confidence_predictions is None
@@ -275,15 +265,12 @@ def test_confidence_aware_gpt_forward_calls():
     tokenizer = MockTokenizer()
 
     # Test with use_confidence=True
+    config = SamplingConfig(device="cpu", max_new_tokens=3, use_confidence=True)
     text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        max_new_tokens=3,  # Generate 3 new tokens
-        temperature=1.0,
-        top_p=0.95,
-        device="cpu",
-        use_confidence=True,
+        config=config,
     )
 
     # Verify forward calls were made
@@ -363,15 +350,12 @@ def test_confidence_aware_gpt_confidence_values():
     tokenizer = MockTokenizer()
 
     # Test with use_confidence=True
+    config = SamplingConfig(device="cpu", max_new_tokens=3, use_confidence=True)
     text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        max_new_tokens=3,  # Generate 3 new tokens
-        temperature=1.0,
-        top_p=0.95,
-        device="cpu",
-        use_confidence=True,
+        config=config,
     )
 
     # Verify we made the expected number of calls
@@ -510,12 +494,12 @@ def test_sample_tokens_from_model_returns_token_ids():
     model = MockMiniGPT()
     tokenizer = MockTokenizer()
 
+    config = SamplingConfig(device="cpu", max_new_tokens=3)
     text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        max_new_tokens=3,
-        device="cpu",
+        config=config,
     )
 
     # Check that all return values are present
@@ -535,13 +519,12 @@ def test_sample_model_output_with_confidence_formatting():
     model = MockConfidenceAwareGPT()
     tokenizer = MockTokenizer()
 
+    config = SamplingConfig(device="cpu", max_new_tokens=3, include_confidence_formatting=True)
     generated, confidence_predictions, formatted_tokens = sample_model_output(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        device="cpu",
-        max_new_tokens=3,
-        include_confidence_formatting=True,
+        config=config,
     )
 
     assert isinstance(generated, str)
@@ -563,13 +546,12 @@ def test_sample_model_output_backward_compatibility():
     tokenizer = MockTokenizer()
 
     # Test without confidence formatting (old behavior)
+    config = SamplingConfig(device="cpu", max_new_tokens=3, include_confidence_formatting=False)
     generated, confidence_predictions, formatted_tokens = sample_model_output(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
-        device="cpu",
-        max_new_tokens=3,
-        include_confidence_formatting=False,
+        config=config,
     )
 
     # Should still work with old tuple unpacking (though this will cause type errors in IDE)
