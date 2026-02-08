@@ -32,7 +32,6 @@ def test_pretraining_experiment_end_to_end():
     # ------------------------------------------------------------------
     config = PretrainingConfig()
     config.training_steps = 5  # Very short training loop
-    config.eval_interval = 1  # Evaluate every step
     config.eval_batches = 1  # Only one batch for evaluation
     config.seeds = [0]  # Single seed to keep runtime low
     config.batch_size = 1
@@ -93,9 +92,7 @@ def test_pretraining_experiment_end_to_end():
             ),
         ),
     ]
-    results = experiment.run(
-        train_loader, eval_loader, model_variants=model_variants, device="cpu"
-    )
+    results = experiment.run(train_loader, eval_loader, model_variants=model_variants, device="cpu")
     # ------------------------------------------------------------------
     # Basic sanity checks on the returned ExperimentResults object
     # ------------------------------------------------------------------

@@ -67,12 +67,8 @@ def test_config_inheritance():
     assert isinstance(config, PretrainingConfig)
 
     # Check that all parent fields are accessible
-    parent_fields = {
-        field.name for field in PretrainingConfig.__dataclass_fields__.values()
-    }
-    child_fields = {
-        field.name for field in ConfidenceExperimentConfig.__dataclass_fields__.values()
-    }
+    parent_fields = {field.name for field in PretrainingConfig.__dataclass_fields__.values()}
+    child_fields = {field.name for field in ConfidenceExperimentConfig.__dataclass_fields__.values()}
 
     # All parent fields should be in child fields
     assert parent_fields.issubset(child_fields)
@@ -85,6 +81,10 @@ def test_config_inheritance():
         "confidence_init_bias",
         "results_dir",
         "save_interval",
+        "sampling_top_p",
+        "sampling_prompt",
+        "sampling_max_tokens",
+        "sampling_temperature",
     }
     assert additional_fields == expected_additional
 

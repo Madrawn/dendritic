@@ -166,23 +166,14 @@ class TestConfidenceAwareExperiment:
 
         assert len(results.standard_model_results) == 1
         assert len(results.confidence_model_results) == 1
-        assert (
-            results.parameter_counts["confidence"]
-            > results.parameter_counts["standard"]
-        )
+        assert results.parameter_counts["confidence"] > results.parameter_counts["standard"]
 
     @pytest.mark.unit
     @patch("dendritic.experiments.confidence.experiment.prepare_confidence_data")
-    @patch(
-        "dendritic.experiments.confidence.experiment.ConfidenceAwareExperiment.train_standard_model"
-    )
-    @patch(
-        "dendritic.experiments.confidence.experiment.ConfidenceAwareExperiment.train_confidence_model"
-    )
+    @patch("dendritic.experiments.confidence.experiment.ConfidenceAwareExperiment.train_standard_model")
+    @patch("dendritic.experiments.confidence.experiment.ConfidenceAwareExperiment.train_confidence_model")
     @patch("dendritic.experiments.confidence.experiment.save_results")
-    def test_run_method_mocked(
-        self, mock_save_results, mock_train_conf, mock_train_std, mock_prepare_data
-    ):
+    def test_run_method_mocked(self, mock_save_results, mock_train_conf, mock_train_std, mock_prepare_data):
         """Test the run method with mocked dependencies."""
         # Setup mocks
         mock_tokenizer = Mock()
@@ -263,6 +254,7 @@ class TestConfidenceAwareExperiment:
             mock_dataloaders["eval"],
             experiment.device,
             42,
+            mock_tokenizer,
         )
 
         mock_train_conf.assert_called_once_with(
@@ -271,6 +263,7 @@ class TestConfidenceAwareExperiment:
             mock_dataloaders["eval"],
             experiment.device,
             42,
+            mock_tokenizer,
         )
 
         # Verify results structure
@@ -371,9 +364,7 @@ class TestConfidenceAwareExperiment:
             elif isinstance(obj, list):
                 return [convert_to_serializable(item) for item in obj]
             elif isinstance(obj, dict):
-                return {
-                    key: convert_to_serializable(value) for key, value in obj.items()
-                }
+                return {key: convert_to_serializable(value) for key, value in obj.items()}
             else:
                 return obj
 
