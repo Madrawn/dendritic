@@ -1,0 +1,3 @@
+[submodule "dendritic/experiments/models/Strawberry"]
+	path = dendritic/experiments/models/Strawberry
+	url = https://github.com/SrijanSriv211/Strawberry.git

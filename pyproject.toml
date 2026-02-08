@@ -21,6 +21,8 @@ requires-python = ">=3.7"
 timeout = 5
 timeout_method = "thread"
 timeout_func_only = true
+[tool.ruff]
+line-length = 120
 
 [tool.ruff.lint]
 # Enable Pylint (PL) and McCabe complexity (C90) rules

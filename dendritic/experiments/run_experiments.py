@@ -15,7 +15,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-
+import math
 import torch
 
 
@@ -41,6 +41,10 @@ from dendritic.experiments.utils.experiment_utils import (
     set_random_seed,
     setup_logging,
 )
+
+import warnings
+
+warnings.filterwarnings("ignore", message="Online softmax")
 
 
 def _find_vcvars_path() -> str | None:
@@ -380,16 +384,20 @@ def main() -> None:
         tokenizer.pad_token = tokenizer.eos_token
 
         # Create configuration with reasonable defaults
+        NUM_HEADS = 6
+        HEAD_DIM = 100
+        BATCH_SIZE = 5
         config = ConfidenceExperimentConfig(
-            training_steps=1000,  # Reasonable for PoC
-            seeds=[42],  # , 123, 456],  # Multiple seeds for statistical significance
-            batch_size=10,
+            # Reasonable for PoC
+            training_steps=math.floor(15000 / BATCH_SIZE**2) * BATCH_SIZE,
+            seeds=[42],
+            batch_size=BATCH_SIZE,
             vocab_size=50257,  # GPT-2 vocab size
-            embed_dim=400,
-            num_heads=8,
-            num_layers=6,
-            max_seq_len=512,
-            dropout=0.1,
+            embed_dim=NUM_HEADS * HEAD_DIM,
+            num_heads=NUM_HEADS,
+            num_layers=8,
+            max_seq_len=256,
+            dropout=0.0,
             scheduler_type="cosine",
             results_dir="results/confidence_experiments",
             dataset="tinystories",
