@@ -50,10 +50,7 @@ def get_handler(
         If `name` is not registered.
     """
     if name not in _REGISTRY:
-        raise KeyError(
-            f"No dataset handler registered for '{name}'. "
-            f"Available handlers: {list(_REGISTRY.keys())}"
-        )
+        raise KeyError(f"No dataset handler registered for '{name}'. Available handlers: {list(_REGISTRY.keys())}")
     handler_cls = _REGISTRY[name]
     return handler_cls(tokenizer, max_length=max_length, **kwargs)
 
@@ -63,31 +60,27 @@ def list_handlers() -> Dict[str, Type[BaseDatasetHandler]]:
     return _REGISTRY.copy()
 
 
-# Auto‑register default handlers
-try:
-    from dendritic.dataset_handlers.WikiTextHandler import WikiTextHandler
+def register_all_handlers():
+    """Register all available handlers. Continues on individual failures and reports summary."""
+    handlers = [
+        ("wikitext", "WikiTextHandler"),
+        ("openwebmath", "OpenWebMathHandler"),
+        ("python_alpaca", "PythonAlpacaHandler"),
+        ("tinystories", "TinyStoriesHandler"),
+    ]
 
-    register_handler("wikitext", WikiTextHandler)
-except ImportError:
-    pass
+    errors = []
+    for name, module_name in handlers:
+        try:
+            module = __import__(f"dendritic.dataset_handlers.{module_name}", fromlist=[module_name])
+            handler_cls = getattr(module, module_name)
+            register_handler(name, handler_cls)
+        except Exception as e:
+            errors.append(f"Failed to register dataset handler '{name}' from '{module_name}': {e}")
 
-try:
-    from dendritic.dataset_handlers.OpenWebMathHandler import OpenWebMathHandler
+    if errors:
+        raise ImportError("Some dataset handlers failed to register:\n" + "\n".join(f"- {e}" for e in errors))
 
-    register_handler("openwebmath", OpenWebMathHandler)
-except ImportError:
-    pass
 
-try:
-    from dendritic.dataset_handlers.PythonAlpacaHandler import PythonAlpacaHandler
-
-    register_handler("python_alpaca", PythonAlpacaHandler)
-except ImportError:
-    pass
-
-try:
-    from dendritic.dataset_handlers.TinyStoriesHandler import TinyStoriesHandler
-
-    register_handler("tinystories", TinyStoriesHandler)
-except ImportError:
-    pass
+# Auto-register all handlers with loud failure
+register_all_handlers()

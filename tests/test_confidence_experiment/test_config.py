@@ -85,6 +85,7 @@ def test_config_inheritance():
         "sampling_prompt",
         "sampling_max_tokens",
         "sampling_temperature",
+        "eval_smoothing_factor",
     }
     assert additional_fields == expected_additional
 
@@ -102,7 +103,7 @@ def test_config_post_init():
 
     # Test that parent __post_init__ is called
     config = ConfidenceExperimentConfig()
-    assert config.eval_interval == max(config.training_steps // 20, 1)
+    assert config.eval_interval == max(config.training_steps // config.training_steps_factor, 1)
 
 
 @pytest.mark.unit

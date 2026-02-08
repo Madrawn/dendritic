@@ -33,6 +33,7 @@ class MockMiniGPT(nn.Module):
     def __init__(self):
         super().__init__()
         self.vocab_size = 1000
+        self.max_seq_len = 10
 
     def forward(self, input_ids):
         """Mock forward method."""
@@ -98,9 +99,7 @@ def test_sample_tokens_from_model_confidence_aware():
     assert isinstance(text, str)
     assert "Mock generated text" in text
     assert confidence_predictions is not None
-    assert (
-        len(confidence_predictions) == 5
-    )  # Should have 5 confidence predictions for 5 new tokens
+    assert len(confidence_predictions) == 5  # Should have 5 confidence predictions for 5 new tokens
 
 
 @pytest.mark.unit
@@ -222,28 +221,21 @@ def test_confidence_aware_gpt_forward_calls():
             super().__init__()
             self.vocab_size = 1000
             self.confidence_predictor = nn.Linear(10, 1)
+            self.max_seq_len = 10
 
         def forward(self, input_ids, confidence_scalars=None):
             # Track the call
             forward_calls.append({
                 "input_ids_shape": input_ids.shape,
-                "confidence_scalars_shape": confidence_scalars.shape
-                if confidence_scalars is not None
-                else None,
-                "confidence_scalars_values": confidence_scalars.tolist()
-                if confidence_scalars is not None
-                else None,
+                "confidence_scalars_shape": confidence_scalars.shape if confidence_scalars is not None else None,
+                "confidence_scalars_values": confidence_scalars.tolist() if confidence_scalars is not None else None,
             })
 
             batch_size, seq_len = input_ids.shape
             # Return increasing confidence predictions to verify they're used
             return {
                 "logits": torch.randn(batch_size, seq_len, self.vocab_size),
-                "confidence_pred": torch.arange(seq_len, dtype=torch.float32).view(
-                    1, seq_len
-                )
-                * 0.1
-                + 0.5,
+                "confidence_pred": torch.arange(seq_len, dtype=torch.float32).view(1, seq_len) * 0.1 + 0.5,
             }
 
     model = TrackingConfidenceAwareGPT()
@@ -305,6 +297,7 @@ def test_confidence_aware_gpt_confidence_values():
             super().__init__()
             self.vocab_size = 1000
             self.confidence_predictor = nn.Linear(10, 1)
+            self.max_seq_len = 10
 
         def forward(self, input_ids, confidence_scalars=None):
             # Track the call with more detail
@@ -326,9 +319,7 @@ def test_confidence_aware_gpt_confidence_values():
 
             batch_size, seq_len = input_ids.shape
             # Return predictable confidence predictions: 0.1 * position + 0.5
-            confidence_pred = (
-                torch.arange(seq_len, dtype=torch.float32).view(1, seq_len) * 0.1 + 0.5
-            )
+            confidence_pred = torch.arange(seq_len, dtype=torch.float32).view(1, seq_len) * 0.1 + 0.5
 
             return {
                 "logits": torch.randn(batch_size, seq_len, self.vocab_size),
@@ -376,12 +367,8 @@ def test_confidence_aware_gpt_confidence_values():
     # So confidence_predictions should be [0.8, 0.9, 1.0]
     # Allow some tolerance for floating point
     expected_confidences = [0.8, 0.9, 1.0]
-    for i, (actual, expected) in enumerate(
-        zip(confidence_predictions, expected_confidences)
-    ):
-        assert abs(actual - expected) < 0.01, (
-            f"Confidence prediction {i}: expected {expected}, got {actual}"
-        )
+    for i, (actual, expected) in enumerate(zip(confidence_predictions, expected_confidences)):
+        assert abs(actual - expected) < 0.01, f"Confidence prediction {i}: expected {expected}, got {actual}"
 
 
 if __name__ == "__main__":

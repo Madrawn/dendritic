@@ -6,22 +6,9 @@ from .OpenWebMathHandler import OpenWebMathHandler
 from .TinyStoriesHandler import TinyStoriesHandler
 
 
-class GitHubCodeHandler(BaseDatasetHandler):
-    """Handler for GitHub code dataset (stub implementation)."""
-
-    def load_data(self, languages: List[str] = ["Python"], **kwargs) -> Dict[str, Any]:
-        """Load GitHub code dataset for specified languages."""
-        raise NotImplementedError("GitHubCodeHandler not yet implemented")
-
-    def tokenize_function(self, examples: Dict[str, Any]) -> Dict[str, Any]:
-        """Tokenize GitHub code examples."""
-        raise NotImplementedError("GitHubCodeHandler not yet implemented")
-
-
 # Export the real handlers
 __all__ = [
     "TinyStoriesHandler",
-    "GitHubCodeHandler",
     "WikiTextHandler",
     "OpenWebMathHandler",
 ]

@@ -76,6 +76,9 @@ class PretrainingConfig(AutoVivifyMixin):
     scheduler_type: str = "plateau"  # "cosine" or "plateau"
     eval_split_ratio: float = 0.1
     do_compile: bool = False  # Whether to use torch.compile for training loop
+    training_steps_factor: int = (
+        50  # Factor to determine eval_interval (eval every training_steps // training_steps_factor steps)
+    )
 
     # ReduceOnPlateau specific parameters
     plateau_patience: int = 4
@@ -120,4 +123,4 @@ class PretrainingConfig(AutoVivifyMixin):
         """Handle the 'dynamic default' logic without __post_init__."""
         if self.effective_eval_interval is not None:
             return self.effective_eval_interval
-        return max(self.training_steps // 50, 1)
+        return max(self.training_steps // self.training_steps_factor, 1)

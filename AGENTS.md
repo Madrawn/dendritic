@@ -8,6 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
+### Important Notes
+- **Running shell commands**: Commands like `python -c` that are followed by multiline strings, will output nothing. Either write a proper .py script, or rather add a proper unit test.
+
 ### Testing
 - **Run all tests**: `python run_tests.py` (custom test runner with mode selection)
 - **Run specific test types**: `python run_tests.py --mode unit|integration|edge|all`
