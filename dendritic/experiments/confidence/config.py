@@ -25,6 +25,15 @@ class ConfidenceExperimentConfig(PretrainingConfig):
     results_dir: str = "results/confidence_experiments"
     save_interval: int = 100  # Save intermediate results every N steps
 
+    # Token sampling configuration
+    sampling_prompt: str = "Once upon a time"  # Prompt for sampling during evaluation
+    sampling_temperature: float = 0.8  # Temperature for sampling
+    sampling_top_p: float = 0.95  # Top-p (nucleus) sampling parameter
+    sampling_max_tokens: int = 50  # Maximum tokens to sample during evaluation
+
+    # Miscellaneous
+    eval_smoothing_factor: float = 0.5  # Smoothing factor for eval loss moving average (for early exit)
+
     def __post_init__(self):
         """Initialize derived fields after dataclass initialization."""
         # Ensure results_dir is a string path

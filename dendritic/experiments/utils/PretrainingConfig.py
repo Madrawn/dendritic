@@ -9,13 +9,9 @@ class CohortSchedulerConfig:
 
     min_mult: float = 0.5  # Minimum multiplier for LR scaling
     max_mult: float = 1.0  # Maximum multiplier for LR scaling
-    sharpness: float = (
-        1.0  # Sharpness of the cosine peak (higher = narrower high LR band)
-    )
+    sharpness: float = 1.0  # Sharpness of the cosine peak (higher = narrower high LR band)
     device: str = "cpu"  # Device for scheduler tensors
-    apply_to_gradients: bool = (
-        True  # Whether to modify gradients (default current behavior)
-    )
+    apply_to_gradients: bool = True  # Whether to modify gradients (default current behavior)
 
 
 class AutoVivifyMixin:
@@ -34,9 +30,7 @@ class AutoVivifyMixin:
             target_type = hints.get(branch_name)
 
             if not target_type:
-                raise ValueError(
-                    f"Field '{branch_name}' not defined in {self.__class__.__name__}"
-                )
+                raise ValueError(f"Field '{branch_name}' not defined in {self.__class__.__name__}")
 
             # 3. Handle Optional[Type] (which is effectively Union[Type, NoneType])
             # If the type is Optional[DeveloperConf], we need to extract DeveloperConf
@@ -81,6 +75,7 @@ class PretrainingConfig(AutoVivifyMixin):
     max_grad_norm: float = 1.0
     scheduler_type: str = "plateau"  # "cosine" or "plateau"
     eval_split_ratio: float = 0.1
+    do_compile: bool = False  # Whether to use torch.compile for training loop
 
     # ReduceOnPlateau specific parameters
     plateau_patience: int = 4
@@ -88,14 +83,13 @@ class PretrainingConfig(AutoVivifyMixin):
     plateau_threshold: float = 1e-3
     plateau_cooldown: int = 0
     plateau_min_lr: float = 1e-6
-    early_stop_multiplier: int = (
-        2  # multiplier for plateau_patience to trigger early stopping
+    early_stop_multiplier: int = 2  # multiplier for plateau_patience to trigger early stopping
+    min_eval_improvement: float | None = (
+        None  # Early exit if smoothed avg_eval_loss improvement is below this threshold
     )
 
     # Evaluation
-    effective_eval_interval: int | None = (
-        None  # If None, computed as training_steps // 20
-    )
+    effective_eval_interval: int | None = None  # If None, computed as training_steps // 20
 
     eval_batches: int = 15
 
@@ -126,4 +120,4 @@ class PretrainingConfig(AutoVivifyMixin):
         """Handle the 'dynamic default' logic without __post_init__."""
         if self.effective_eval_interval is not None:
             return self.effective_eval_interval
-        return max(self.training_steps // 20, 1)
+        return max(self.training_steps // 50, 1)

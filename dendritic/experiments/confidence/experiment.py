@@ -6,24 +6,18 @@ ConfidenceAwareGPT (with two-pass lookahead training) vs standard MiniGPT.
 """
 
 import logging
-import os
-import time
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
-from tqdm import tqdm
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from dendritic.experiments.models.MiniGPT import MiniGPT, ConfidenceAwareGPT
 from dendritic.experiments.utils.TrainingResult import TrainingResult
-from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
 from dendritic.experiments.utils.param_utils import find_matching_hidden_dims
-from dendritic.experiments.utils.experiment_utils import set_random_seed
-from dendritic.experiments.utils.loss_utils import compute_language_modeling_loss
+from dendritic.experiments.utils.loss_utils import (
+    compute_sequence_language_modeling_loss,
+)
 
 from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
 from dendritic.experiments.confidence.data_loader import prepare_confidence_data
@@ -31,8 +25,6 @@ from dendritic.experiments.confidence.results import (
     ConfidenceTrainingResult,
     ConfidenceExperimentResults,
     save_results,
-    load_results,
-    create_results_filename,
 )
 from dendritic.experiments.confidence.UnifiedTrainer import (
     UnifiedTrainer,
@@ -101,9 +93,8 @@ class ConfidenceAwareExperiment:
         )
 
         # Create ConfidenceAwareGPT
-        # Confidence model needs to handle sequences of length max_seq_len + 1
-        # for lookahead training (hypothetical sequence with appended token)
-        confidence_max_seq_len = self.config.max_seq_len + 1
+        # Confidence model uses same sequence length as standard model
+        confidence_max_seq_len = self.config.max_seq_len
         confidence_model = ConfidenceAwareGPT(
             vocab_size=self.config.vocab_size,
             embed_dim=self.config.embed_dim,
@@ -122,8 +113,7 @@ class ConfidenceAwareExperiment:
         logging.info(f"Standard model parameters: {std_params:,}")
         logging.info(f"Confidence model parameters: {conf_params:,}")
         logging.info(
-            f"Parameter difference: {conf_params - std_params:,} "
-            f"({(conf_params - std_params) / std_params * 100:.2f}%)"
+            f"Parameter difference: {conf_params - std_params:,} ({(conf_params - std_params) / std_params * 100:.2f}%)"
         )
 
         return standard_model, confidence_model
@@ -135,6 +125,7 @@ class ConfidenceAwareExperiment:
         eval_loader,
         device: str,
         seed: int,
+        tokenizer=None,  # Optional tokenizer for sampling
     ) -> ConfidenceTrainingResult:
         """
         Two-pass training loop using unified trainer.
@@ -145,18 +136,31 @@ class ConfidenceAwareExperiment:
             eval_loader: DataLoader for evaluation
             device: Device to train on
             seed: Random seed for reproducibility
+            tokenizer: Optional tokenizer for sampling during evaluation
 
         Returns:
             ConfidenceTrainingResult with training metrics
         """
         strategy = ConfidenceTrainingStrategy(self.config)
-        trainer = UnifiedTrainer(self.config, strategy, "confidence")
+        trainer = UnifiedTrainer(
+            self.config,
+            strategy,
+            "confidence",
+            tokenizer=tokenizer,
+            results_dir=self.results_dir,
+        )
         result = trainer.train(model, train_loader, eval_loader, seed)
         # Type cast since ConfidenceTrainingStrategy returns ConfidenceTrainingResult
         return result  # type: ignore
 
     def train_standard_model(
-        self, model: MiniGPT, train_loader, eval_loader, device: str, seed: int
+        self,
+        model: MiniGPT,
+        train_loader,
+        eval_loader,
+        device: str,
+        seed: int,
+        tokenizer=None,
     ) -> TrainingResult:
         """
         Standard training loop using unified trainer.
@@ -167,12 +171,19 @@ class ConfidenceAwareExperiment:
             eval_loader: DataLoader for evaluation
             device: Device to train on
             seed: Random seed for reproducibility
+            tokenizer: Optional tokenizer for sampling during evaluation
 
         Returns:
             TrainingResult with training metrics
         """
         strategy = StandardTrainingStrategy(self.config)
-        trainer = UnifiedTrainer(self.config, strategy, "standard")
+        trainer = UnifiedTrainer(
+            self.config,
+            strategy,
+            "standard",
+            tokenizer=tokenizer,
+            results_dir=self.results_dir,
+        )
         result = trainer.train(model, train_loader, eval_loader, seed)
         # Type cast since StandardTrainingStrategy returns TrainingResult
         return result  # type: ignore
@@ -186,9 +197,7 @@ class ConfidenceAwareExperiment:
         total_batches = 0
 
         with torch.no_grad():
-            for i, (tokens_t, tokens_t_plus_1, tokens_t_plus_2) in enumerate(
-                eval_loader
-            ):
+            for i, (tokens_t, tokens_t_plus_1, tokens_t_plus_2) in enumerate(eval_loader):
                 if i >= num_batches:
                     break
 
@@ -219,9 +228,7 @@ class ConfidenceAwareExperiment:
         model.train()
         return total_loss / total_batches if total_batches > 0 else float("inf")
 
-    def _evaluate_standard_model(
-        self, model: MiniGPT, eval_loader, device: str, num_batches: int
-    ) -> float:
+    def _evaluate_standard_model(self, model: MiniGPT, eval_loader, device: str, num_batches: int) -> float:
         """Evaluate standard model on validation set."""
         model.eval()
         total_loss = 0.0
@@ -247,7 +254,7 @@ class ConfidenceAwareExperiment:
 
                 # Model no longer computes loss internally
                 logits = model(input_ids)
-                loss = compute_language_modeling_loss(logits, seq_labels)
+                loss = compute_sequence_language_modeling_loss(logits, seq_labels, reduction="mean")
                 total_loss += loss.item()
                 total_batches += 1
 
@@ -299,38 +306,31 @@ class ConfidenceAwareExperiment:
             # Train confidence model
             logging.info(f"Training confidence model (seed={seed})...")
             confidence_result = self.train_confidence_model(
-                confidence_model, train_loader, eval_loader, self.device, seed
+                confidence_model,
+                train_loader,
+                eval_loader,
+                self.device,
+                seed,
+                tokenizer,
             )
             confidence_results[str(seed)] = [confidence_result]
             training_times["confidence"].append(confidence_result.training_time)
             # Train standard model
             logging.info(f"Training standard model (seed={seed})...")
             standard_result = self.train_standard_model(
-                standard_model, train_loader, eval_loader, self.device, seed
+                standard_model, train_loader, eval_loader, self.device, seed, tokenizer
             )
             standard_results[str(seed)] = [standard_result]
             training_times["standard"].append(standard_result.training_time)
 
             # Save intermediate results
-            if self.config.save_interval > 0 and (
-                seed % self.config.save_interval == 0
-            ):
-                self._save_intermediate_results(
-                    standard_results, confidence_results, parameter_counts, seed
-                )
+            if self.config.save_interval > 0 and (seed % self.config.save_interval == 0):
+                self._save_intermediate_results(standard_results, confidence_results, parameter_counts, seed)
 
         # Calculate average training times
         avg_training_time = {
-            "standard": (
-                float(np.mean(training_times["standard"]))
-                if training_times["standard"]
-                else 0.0
-            ),
-            "confidence": (
-                float(np.mean(training_times["confidence"]))
-                if training_times["confidence"]
-                else 0.0
-            ),
+            "standard": (float(np.mean(training_times["standard"])) if training_times["standard"] else 0.0),
+            "confidence": (float(np.mean(training_times["confidence"])) if training_times["confidence"] else 0.0),
         }
 
         # Create final results object
@@ -361,21 +361,13 @@ class ConfidenceAwareExperiment:
         training_time = {"standard": 0.0, "confidence": 0.0}
         if standard_results:
             # Get average training time for standard models
-            std_times = [
-                r.training_time
-                for seed_list in standard_results.values()
-                for r in seed_list
-            ]
+            std_times = [r.training_time for seed_list in standard_results.values() for r in seed_list]
             if std_times:
                 training_time["standard"] = float(np.mean(std_times))
 
         if confidence_results:
             # Get average training time for confidence models
-            conf_times = [
-                r.training_time
-                for seed_list in confidence_results.values()
-                for r in seed_list
-            ]
+            conf_times = [r.training_time for seed_list in confidence_results.values() for r in seed_list]
             if conf_times:
                 training_time["confidence"] = float(np.mean(conf_times))
 

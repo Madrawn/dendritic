@@ -31,9 +31,7 @@ class MiniGPT(nn.Module):
         num_layers: int,
         max_seq_len: int,
         hidden_dim: int,
-        mlp_type: Literal[
-            "standard", "dendritic"
-        ] = "standard",  # "standard", "dendritic", or "dendritic_stack"
+        mlp_type: Literal["standard", "dendritic"] = "standard",  # "standard", "dendritic", or "dendritic_stack"
         poly_rank: int = 16,
         poly_degree: int = 3,
         dropout: float = 0.0,
@@ -41,7 +39,7 @@ class MiniGPT(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.max_seq_len = max_seq_len
-
+        self.num_layers = num_layers
         # Embeddings
         self.tok_emb = nn.Embedding(vocab_size, embed_dim)
         self.pos_emb = nn.Embedding(max_seq_len, embed_dim)
@@ -140,9 +138,7 @@ class MiniGPT(nn.Module):
             all_layer_outputs.append(x.detach())
         return x, all_layer_outputs
 
-    def embed_input_sequence(
-        self, input_ids: torch.Tensor, T: int
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def embed_input_sequence(self, input_ids: torch.Tensor, T: int) -> tuple[torch.Tensor, torch.Tensor | None]:
         tok_emb = self.tok_emb(input_ids)
         pos: torch.Tensor = torch.arange(T, device=input_ids.device).unsqueeze(0)
         pos_emb: torch.Tensor = self.pos_emb(pos)
@@ -162,18 +158,18 @@ class ConfidenceAwareGPT(MiniGPT):
     def __init__(self, *args, **kwargs):
         # Initialize the base MiniGPT
         super().__init__(*args, **kwargs)
-
+        self.take_meta = min(kwargs.get("take_meta", 3), self.num_layers)
+        if not isinstance(self.take_meta, int) or self.take_meta < 1:
+            raise ValueError("take_meta must be a positive integer")
         # ADDED: The Head to predict the loss/confidence
         # Projects hidden_state [B, T, dim] -> [B, T, 1]
-        self.confidence_predictor = nn.Linear(self.embed_dim * len(self.blocks), 1)
+        self.confidence_predictor = nn.Linear(self.embed_dim * self.take_meta, 1)
 
         # Initialize bias to a positive value (e.g. 2.0 ~ perplexity 7.4)
         # Prevents initial "zero loss" predictions which cause instability
         nn.init.constant_(self.confidence_predictor.bias, 2.0)
 
-    def create_transformer_block(
-        self, embed_dim, num_heads, dropout, mlp
-    ) -> MetaAwareBlock:
+    def create_transformer_block(self, embed_dim, num_heads, dropout, mlp) -> MetaAwareBlock:
         # Use the custom block with AdaptiveLayer
         return MetaAwareBlock(embed_dim, num_heads, mlp, dropout)
 
@@ -220,9 +216,7 @@ class ConfidenceAwareGPT(MiniGPT):
 
         # 2. Predict Future Loss
         # Output shape: [B, T, 1] -> squeeze to [B, T] for easier loss calc later
-        current_confidence_pred = self.confidence_predictor(
-            torch.cat(all_outputs, dim=-1)
-        ).squeeze(-1)
+        current_confidence_pred = self.confidence_predictor(torch.cat(all_outputs, dim=-1)).squeeze(-1)
 
         return {"logits": logits, "confidence_pred": current_confidence_pred}
 
@@ -238,12 +232,10 @@ class ConfidenceAwareGPT(MiniGPT):
         for block in self.blocks:
             x = block(x, confidence_scalar=confidence_scalars, attn_mask=mask)
             all_layer_outputs.append(x.detach())
-        return x, all_layer_outputs
+        return x, all_layer_outputs[-self.take_meta :]  # For confidence predictor
 
     @staticmethod
-    def two_pass_training_step(
-        model: "ConfidenceAwareGPT", tokens_t, tokens_t_plus_1, alpha=1.0
-    ):
+    def two_pass_training_step(model: "ConfidenceAwareGPT", tokens_t, tokens_t_plus_1, alpha=1.0):
         """
         tokens_t: [B, SeqLen] - input sequence
         tokens_t_plus_1: [B] - next token after the sequence
@@ -276,9 +268,7 @@ class ConfidenceAwareGPT(MiniGPT):
             # Prepare confidence input for pass 2 (shift right by 1)
             conf_input = torch.cat(
                 [
-                    torch.zeros(
-                        B, 1, 1, device=tokens_t.device, dtype=conf_pred_1.dtype
-                    ),
+                    torch.zeros(B, 1, 1, device=tokens_t.device, dtype=conf_pred_1.dtype),
                     conf_pred_1[:, :-1].unsqueeze(-1),
                 ],
                 dim=1,
@@ -289,13 +279,13 @@ class ConfidenceAwareGPT(MiniGPT):
         logits_2 = outputs_2["logits"]  # [B, SeqLen, vocab]
         conf_pred_2 = outputs_2["confidence_pred"]  # [B, SeqLen]
 
-        # Token prediction loss - USE SHIFTED LOGITS AND LABELS
+        # Token prediction loss
         # Logits at positions 0..SeqLen-2 predict labels at positions 0..SeqLen-2
         # (We drop the last logit position since it doesn't have a "next" token to predict reliably in pass 2)
-        loss_lm = compute_language_modeling_loss(
+        loss_lm = compute_sequence_language_modeling_loss(
             logits_2[:, :-1],  # Only use up to SeqLen-1
             labels[:, :-1],  # Only use up to SeqLen-1
-            ignore_index=-100,
+            reduction="mean",
         )
 
         # Confidence loss: positions 0..SeqLen-2 predict their future difficulty

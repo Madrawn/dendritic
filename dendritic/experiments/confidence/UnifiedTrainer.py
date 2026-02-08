@@ -40,6 +40,8 @@ class UnifiedTrainer:
         config: ConfidenceExperimentConfig,
         strategy: TrainingStrategy,
         model_type: str,
+        tokenizer=None,  # Optional tokenizer for sampling
+        results_dir=None,  # Directory for saving sampled tokens
     ):
         """
         Initialize unified trainer.
@@ -48,10 +50,14 @@ class UnifiedTrainer:
             config: Experiment configuration
             strategy: Training strategy to use
             model_type: Type of model (for logging)
+            tokenizer: Optional tokenizer for sampling during evaluation
+            results_dir: Directory for saving sampled tokens
         """
         self.config = config
         self.strategy = strategy
         self.model_type = model_type
+        self.tokenizer = tokenizer
+        self.results_dir = results_dir or config.results_dir
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # CUDA performance optimizations (ported from pretraining experiment)
@@ -80,9 +86,7 @@ class UnifiedTrainer:
             except RuntimeError as e:
                 if "DataLoader worker" in str(e):
                     # Windows-specific issue with worker processes
-                    logging.warning(
-                        f"DataLoader worker issue: {e}. Restarting iterator."
-                    )
+                    logging.warning(f"DataLoader worker issue: {e}. Restarting iterator.")
                     continue
                 raise
 
@@ -104,9 +108,7 @@ class UnifiedTrainer:
 
         with torch.no_grad():
             i = 0
-            for batch in tqdm(
-                dataloader, total=max_batches, desc="Evaluating", leave=False
-            ):
+            for batch in tqdm(dataloader, total=max_batches, desc="Evaluating", leave=False):
                 if max_batches and i >= max_batches:
                     break
                 i += 1
@@ -126,9 +128,7 @@ class UnifiedTrainer:
 
         return total_loss / total_tokens if total_tokens > 0 else float("nan")
 
-    def _evaluate(
-        self, model: nn.Module, eval_loader: Iterable, device: str, num_batches: int
-    ) -> float:
+    def _evaluate(self, model: nn.Module, eval_loader: Iterable, device: str, num_batches: int) -> float:
         """
         Evaluate model on validation set.
 
@@ -158,15 +158,116 @@ class UnifiedTrainer:
                 prepared_batch = self.strategy.prepare_batch(batch, device)
 
                 # Evaluation step using strategy
-                step_result = self.strategy.evaluation_step(
-                    model, prepared_batch, device
-                )
+                step_result = self.strategy.evaluation_step(model, prepared_batch, device)
 
                 total_loss += step_result["loss"].item()
                 total_batches += 1
 
         model.train()
         return total_loss / total_batches if total_batches > 0 else float("inf")
+
+    def _sample_and_log(self, model: nn.Module, step: int, eval_loss: float, seed: int):
+        """
+        Sample tokens from model and log results.
+
+        Args:
+            model: Model to sample from
+            step: Current training step
+            eval_loss: Current evaluation loss
+            seed: Random seed for reproducibility
+        """
+        if self.tokenizer is None:
+            logging.warning("No tokenizer provided, skipping sampling")
+            return
+
+        try:
+            from dendritic.experiments.confidence.sampling_utils import (
+                sample_model_output,
+            )
+
+            # Determine if we should use confidence-aware sampling
+            # Only for ConfidenceAwareGPT models
+            use_confidence = hasattr(model, "confidence_predictor")
+
+            generated, confidence_predictions = sample_model_output(
+                model=model,
+                tokenizer=self.tokenizer,
+                prompt=self.config.sampling_prompt,
+                device=self.device,
+                max_new_tokens=self.config.sampling_max_tokens,
+                temperature=self.config.sampling_temperature,
+                top_p=self.config.sampling_top_p,
+                use_confidence=use_confidence,
+            )
+
+            # Log truncated version to console
+            truncated = generated[:100] + "..." if len(generated) > 100 else generated
+            log_message = f"{self.model_type} seed={seed} step={step}: eval_loss={eval_loss:.4f}, sampled: {truncated}"
+
+            # Add confidence predictions to log if available
+            if confidence_predictions is not None and len(confidence_predictions) > 0:
+                avg_conf = sum(confidence_predictions) / len(confidence_predictions)
+                log_message += f", avg_conf={avg_conf:.4f}"
+
+            logging.info(log_message)
+
+            # Save full version to text file
+            self._save_sampled_tokens_to_file(
+                step=step,
+                seed=seed,
+                model_type=self.model_type,
+                eval_loss=eval_loss,
+                sampled_text=generated,
+                confidence_predictions=confidence_predictions,
+            )
+
+        except Exception as e:
+            logging.warning(f"Sampling failed: {e}")
+
+    def _save_sampled_tokens_to_file(
+        self,
+        step,
+        seed,
+        model_type,
+        eval_loss,
+        sampled_text,
+        confidence_predictions=None,
+    ):
+        """
+        Save sampled tokens to text file alongside JSON results.
+
+        Args:
+            step: Training step
+            seed: Random seed
+            model_type: Type of model
+            eval_loss: Evaluation loss
+            sampled_text: Full sampled text
+            confidence_predictions: Optional list of confidence predictions
+        """
+        from datetime import datetime
+        from pathlib import Path
+
+        # Ensure results directory exists
+        results_path = Path(self.results_dir)
+        results_path.mkdir(parents=True, exist_ok=True)
+
+        # Create text file name based on timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        text_file = results_path / f"{timestamp}_{model_type}_seed{seed}_sampled_tokens.txt"
+
+        # Append to file
+        with open(text_file, "a", encoding="utf-8") as f:
+            f.write(f"=== Step {step} (Seed: {seed}, Model: {model_type}) ===\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write(f"Eval Loss: {eval_loss:.4f}\n")
+            f.write(f"Sampled Tokens: {sampled_text}\n")
+
+            # Add confidence predictions if available
+            if confidence_predictions is not None and len(confidence_predictions) > 0:
+                f.write(f"Confidence Predictions: {confidence_predictions}\n")
+                f.write(f"Avg Confidence: {sum(confidence_predictions) / len(confidence_predictions):.4f}\n")
+
+            f.write("=" * 40 + "\n\n")
 
     def train(
         self, model: nn.Module, train_loader: Iterable, eval_loader: Iterable, seed: int
@@ -190,7 +291,7 @@ class UnifiedTrainer:
         if self.use_cuda:
             torch.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
-
+        # torch.cuda.memory._record_memory_history(max_entries=100000)
         # Move model to device
         model = model.to(self.device)
 
@@ -207,10 +308,10 @@ class UnifiedTrainer:
                     model = model._orig_mod  # type: ignore
 
         # ========== 3. OPTIMIZER ==========
-        optimizer = torch.optim.AdamW(
+        optimizer = torch.optim.Adafactor(
             model.parameters(),
-            lr=self.config.learning_rate,
-            weight_decay=self.config.weight_decay,
+            # lr=self.config.learning_rate,
+            # weight_decay=self.config.weight_decay,
         )
 
         # ========== 4. SCHEDULER (ported from pretraining) ==========
@@ -222,9 +323,7 @@ class UnifiedTrainer:
             def lr_lambda(step: int) -> float:
                 if step < warmup_steps:
                     return float(step) / float(max(1, warmup_steps))
-                progress = float(step - warmup_steps) / float(
-                    max(1, training_steps - warmup_steps)
-                )
+                progress = float(step - warmup_steps) / float(max(1, training_steps - warmup_steps))
                 return 0.5 * (1.0 + np.cos(np.pi * progress))
 
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -254,6 +353,9 @@ class UnifiedTrainer:
             "confidence_predictions": [],
             "actual_future_losses": [],
         }
+
+        # Track minimal improvement early exit (using smoothed avg_eval_loss)
+        last_avg_eval_loss = None
 
         # ========== 7. PREFETCHING ITERATOR ==========
         train_iter = self.prefetching_cycle(train_loader, self.device)
@@ -315,33 +417,21 @@ class UnifiedTrainer:
 
             # Track strategy-specific metrics
             if "loss_confidence" in step_result:
-                strategy_metrics["confidence_loss_history"].append(
-                    step_result["loss_confidence"].item()
-                )
+                strategy_metrics["confidence_loss_history"].append(step_result["loss_confidence"].item())
             if "loss_lm" in step_result:
-                strategy_metrics["token_loss_history"].append(
-                    step_result["loss_lm"].item()
-                )
+                strategy_metrics["token_loss_history"].append(step_result["loss_lm"].item())
             if "pred_conf_t" in step_result:
-                strategy_metrics["confidence_predictions"].append(
-                    step_result["pred_conf_t"].mean().item()
-                )
+                strategy_metrics["confidence_predictions"].append(step_result["pred_conf_t"].mean().item())
 
             # Accumulate Loss (GPU resident) - ported from pretraining
-            avg_train_loss_tensor = (
-                avg_train_loss_tensor * 0.9 + 0.1 * loss.detach().cpu()
-            )
+            avg_train_loss_tensor = avg_train_loss_tensor * 0.9 + 0.1 * loss.detach().cpu()
 
             # Accumulate separate losses if available
             if "loss_lm" in step_result:
-                avg_train_lm_loss_tensor = (
-                    avg_train_lm_loss_tensor * 0.9
-                    + 0.1 * step_result["loss_lm"].detach().cpu()
-                )
+                avg_train_lm_loss_tensor = avg_train_lm_loss_tensor * 0.9 + 0.1 * step_result["loss_lm"].detach().cpu()
             if "loss_confidence" in step_result:
                 avg_train_conf_loss_tensor = (
-                    avg_train_conf_loss_tensor * 0.9
-                    + 0.1 * step_result["loss_confidence"].detach().cpu()
+                    avg_train_conf_loss_tensor * 0.9 + 0.1 * step_result["loss_confidence"].detach().cpu()
                 )
 
             # Update Progress Bar (Periodic Sync) - ported from pretraining
@@ -354,12 +444,10 @@ class UnifiedTrainer:
 
                 if queued_loss is not None:
                     # This .item() will be instant
-                    progress.set_postfix(
-                        {
-                            "loss": f"{queued_loss.item():.4f}",
-                            "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
-                        }
-                    )
+                    progress.set_postfix({
+                        "loss": f"{queued_loss.item():.4f}",
+                        "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
+                    })
 
                 # Update the queue
                 queued_loss = current_loss_tensor
@@ -377,9 +465,16 @@ class UnifiedTrainer:
                         getattr(self.config, "eval_batches", 10),
                         self.device,
                     )
+                # torch.cuda.memory._dump_snapshot("snappershop.pickle")
+                # torch.cuda.memory._record_memory_history(enabled=None)
+
                 model.train()
 
-                avg_eval_loss = avg_eval_loss * 0.9 + 0.1 * eval_loss
+                # Sample tokens from model during evaluation
+                self._sample_and_log(model, step + 1, eval_loss, seed)
+
+                smoothing_factor = getattr(self.config, "eval_smoothing_factor", 0.5)
+                avg_eval_loss = avg_eval_loss * smoothing_factor + (1 - smoothing_factor) * eval_loss
                 perplexity = np.exp(eval_loss)
 
                 if avg_eval_loss < best_eval_loss:
@@ -390,12 +485,8 @@ class UnifiedTrainer:
 
                 # Plateau scheduler step
                 if self.config.scheduler_type == "plateau" and scheduler is not None:
-                    scheduler = cast(
-                        torch.optim.lr_scheduler.ReduceLROnPlateau, scheduler
-                    )
-                    scheduler.step(
-                        avg_eval_loss
-                    )  # ReduceLROnPlateau expects metrics parameter
+                    scheduler = cast(torch.optim.lr_scheduler.ReduceLROnPlateau, scheduler)
+                    scheduler.step(avg_eval_loss)  # ReduceLROnPlateau expects metrics parameter
 
                 # Record loss history
                 history_entry = {
@@ -410,9 +501,7 @@ class UnifiedTrainer:
                 if "loss_lm" in step_result:
                     history_entry["train_loss_lm"] = step_result["loss_lm"].item()
                 if "loss_confidence" in step_result:
-                    history_entry["train_loss_conf"] = step_result[
-                        "loss_confidence"
-                    ].item()
+                    history_entry["train_loss_conf"] = step_result["loss_confidence"].item()
 
                 loss_history.append(history_entry)
 
@@ -433,15 +522,17 @@ class UnifiedTrainer:
                         f"train={avg_train_loss:.4f}, avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
                     )
 
-                # Early stopping check (ported from pretraining)
-                plateau_patience = getattr(self.config, "plateau_patience", 5)
-                early_stop_multiplier = getattr(self.config, "early_stop_multiplier", 3)
-                if (
-                    self.config.scheduler_type == "plateau"
-                    and no_improvement_count >= plateau_patience * early_stop_multiplier
-                ):
-                    logging.info("Early stopping triggered.")
-                    break
+                # Minimal improvement early exit check (using smoothed avg_eval_loss)
+                min_improvement = getattr(self.config, "min_eval_improvement", None)
+                if min_improvement is not None and last_avg_eval_loss is not None:
+                    improvement = last_avg_eval_loss - avg_eval_loss
+                    if improvement < min_improvement:
+                        logging.info(
+                            f"Early stopping triggered: smoothed eval loss improvement "
+                            f"({improvement:.6f}) below threshold ({min_improvement})"
+                        )
+                        break
+                last_avg_eval_loss = avg_eval_loss
 
         training_time = time.time() - start_time
         final_train_loss = loss.item() if loss is not None else float("inf")
@@ -452,6 +543,9 @@ class UnifiedTrainer:
             final_eval_loss = self._evaluate_with_iterator(
                 model, eval_iter, self.config.eval_batches or 10, self.device
             )
+
+        # Sample tokens from model after final evaluation
+        self._sample_and_log(model, training_steps, final_eval_loss, seed)
 
         # Memory cleanup (ported from pretraining)
         eval_iter.close()

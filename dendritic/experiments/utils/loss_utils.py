@@ -79,6 +79,10 @@ def compute_sequence_language_modeling_loss(
         Loss tensor of shape [batch_size, seq_len] if reduction='none',
         otherwise scalar tensor
     """
+    # Make tensors contiguous before reshaping to avoid view errors on sliced inputs
+    logits = logits.contiguous()
+    labels = labels.contiguous()
+
     # Reshape for per-position loss computation
     batch_size, seq_len, vocab_size = logits.shape
     logits_flat = logits.view(-1, vocab_size)

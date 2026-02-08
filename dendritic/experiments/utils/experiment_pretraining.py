@@ -114,9 +114,7 @@ class PretrainingExperiment:
         Helper to construct a MiniGPT model with given parameters.
         """
         baseline_hidden, dendritic_hidden = find_matching_hidden_dims(self.config)
-        hidden_dim = {"standard": baseline_hidden, "dendritic": dendritic_hidden}[
-            mlp_type
-        ]
+        hidden_dim = {"standard": baseline_hidden, "dendritic": dendritic_hidden}[mlp_type]
         return MiniGPT(
             vocab_size=self.config.vocab_size,
             embed_dim=self.config.embed_dim,
@@ -196,6 +194,7 @@ class PretrainingExperiment:
         seed: int,
         device: str,
         optimizer: torch.optim.Optimizer,
+        do_compile: bool,
     ) -> TrainingResult:
         """Train a single model (Fixed: Windows Safe, Scaler, Seeding)."""
         # ========== 1. CUDA & PRECISION SETUP ==========
@@ -210,7 +209,7 @@ class PretrainingExperiment:
 
         # ========== 2. COMPILATION ==========
         # Windows -> default, Linux -> reduce-overhead
-        if device.startswith("cuda"):
+        if device.startswith("cuda") and do_compile:
             compile_mode = "default" if os.name == "nt" else "reduce-overhead"
             try:
                 logging.info(f"Compiling model with mode='{compile_mode}'...")
@@ -229,9 +228,7 @@ class PretrainingExperiment:
             def lr_lambda(step: int) -> float:
                 if step < warmup_steps:
                     return float(step) / float(max(1, warmup_steps))
-                progress = float(step - warmup_steps) / float(
-                    max(1, training_steps - warmup_steps)
-                )
+                progress = float(step - warmup_steps) / float(max(1, training_steps - warmup_steps))
                 return 0.5 * (1.0 + np.cos(np.pi * progress))
 
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -255,9 +252,7 @@ class PretrainingExperiment:
         # ========== 5. COHORT SCHEDULER ==========
         if self.config.cohort_scheduler is not None:
             logging.info("Using Cohort LR Scheduler.")
-            cohort_scheduler = self._create_cohort_scheduler(
-                self.config.cohort_scheduler, device
-            )
+            cohort_scheduler = self._create_cohort_scheduler(self.config.cohort_scheduler, device)
         else:
             cohort_scheduler = None
 
@@ -301,10 +296,7 @@ class PretrainingExperiment:
                 # Handle different model types
                 # For MiniGPT: model returns logits
                 # For GPT2LMHeadModel: model returns CausalLMOutputWithCrossAttentions
-                if (
-                    hasattr(model, "__class__")
-                    and "MiniGPT" in model.__class__.__name__
-                ):
+                if hasattr(model, "__class__") and "MiniGPT" in model.__class__.__name__:
                     # MiniGPT model - compute loss externally
                     logits = model.forward(input_ids)  # type: ignore
                     loss = compute_language_modeling_loss(logits, labels)
@@ -341,9 +333,7 @@ class PretrainingExperiment:
                 scheduler.step()
 
             # Accumulate Loss (GPU resident)
-            avg_train_loss_tensor = (
-                avg_train_loss_tensor * 0.9 + 0.1 * loss.detach().cpu()
-            )
+            avg_train_loss_tensor = avg_train_loss_tensor * 0.9 + 0.1 * loss.detach().cpu()
             # logging_step_count += 1
 
             # Update Progress Bar (Periodic Sync)
@@ -351,12 +341,10 @@ class PretrainingExperiment:
                 current_loss_tensor = loss.detach().cpu()
                 if queued_loss is not None:
                     # This .item() will be instant
-                    progress.set_postfix(
-                        {
-                            "loss": f"{queued_loss.item():.4f}",
-                            "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
-                        }
-                    )
+                    progress.set_postfix({
+                        "loss": f"{queued_loss.item():.4f}",
+                        "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
+                    })
 
                 # 3. Update the queue
                 queued_loss = current_loss_tensor
@@ -369,12 +357,10 @@ class PretrainingExperiment:
 
                 model.eval()
                 with torch.no_grad():
-                    eval_loss = self.evaluate(
-                        model, eval_iter, self.config.eval_batches, device
-                    )
+                    eval_loss = self.evaluate(model, eval_iter, self.config.eval_batches, device)
                 model.train()
 
-                avg_eval_loss = avg_eval_loss * 0.9 + 0.1 * eval_loss
+                avg_eval_loss = avg_eval_loss * 0.5 + 0.5 * eval_loss
                 perplexity = np.exp(eval_loss)
 
                 if avg_eval_loss < best_eval_loss:
@@ -384,9 +370,7 @@ class PretrainingExperiment:
                     no_improvement_count += 1
 
                 if not is_cosine:
-                    assert isinstance(
-                        scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau
-                    )
+                    assert isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
                     rel_epsilon = 1.0 - scheduler.threshold
                     target = scheduler.best * rel_epsilon
                     logging.info(
@@ -394,15 +378,13 @@ class PretrainingExperiment:
                     )
                     scheduler.step(avg_eval_loss)
 
-                loss_history.append(
-                    {
-                        "step": step + 1,
-                        "train_loss": avg_train_loss,
-                        "eval_loss": eval_loss,
-                        "perplexity": perplexity,
-                        "lr": optimizer.param_groups[0]["lr"],
-                    }
-                )
+                loss_history.append({
+                    "step": step + 1,
+                    "train_loss": avg_train_loss,
+                    "eval_loss": eval_loss,
+                    "perplexity": perplexity,
+                    "lr": optimizer.param_groups[0]["lr"],
+                })
 
                 logging.info(
                     f"\n{model_type} seed={seed} step={step + 1}: "
@@ -411,8 +393,7 @@ class PretrainingExperiment:
 
                 if (
                     self.config.scheduler_type == "plateau"
-                    and no_improvement_count
-                    >= self.config.plateau_patience * self.config.early_stop_multiplier
+                    and no_improvement_count >= self.config.plateau_patience * self.config.early_stop_multiplier
                 ):
                     logging.info("Early stopping triggered.")
                     break
@@ -424,9 +405,7 @@ class PretrainingExperiment:
         # Final Eval
         model.eval()
         with torch.no_grad():
-            final_eval_loss = self.evaluate(
-                model, eval_iter, self.config.eval_batches, device
-            )
+            final_eval_loss = self.evaluate(model, eval_iter, self.config.eval_batches, device)
         from dendritic.enhancement import get_polynomial_stats
 
         polynomial_stats = get_polynomial_stats(model)
@@ -473,9 +452,7 @@ class PretrainingExperiment:
 
         with torch.no_grad():
             i = 0
-            for input_ids, labels in tqdm(
-                dataloader, total=max_batches, desc="Evaluating", leave=False
-            ):
+            for input_ids, labels in tqdm(dataloader, total=max_batches, desc="Evaluating", leave=False):
                 if max_batches and i >= max_batches:
                     break
                 i += 1
@@ -484,10 +461,7 @@ class PretrainingExperiment:
                 # Handle different model types
                 # For MiniGPT: model returns logits
                 # For GPT2LMHeadModel: model returns CausalLMOutputWithCrossAttentions
-                if (
-                    hasattr(model, "__class__")
-                    and "MiniGPT" in model.__class__.__name__
-                ):
+                if hasattr(model, "__class__") and "MiniGPT" in model.__class__.__name__:
                     # MiniGPT model - compute loss externally
                     logits = model(input_ids)
                     loss = compute_language_modeling_loss(logits, labels)
@@ -532,6 +506,7 @@ class PretrainingExperiment:
                     seed,
                     device,
                     variant.optimizer,
+                    self.config.do_compile,
                 )
                 variant.results.append(result)
                 logging.info(
@@ -578,9 +553,7 @@ def train_config_with_models(
     train_dl = dataloaders["train"]
     eval_dl = dataloaders["eval"]
 
-    model = experiment._build_model(
-        mlp_type=experiment.config.layer_type, dropout=experiment.config.dropout
-    )  # type: ignore
+    model = experiment._build_model(mlp_type=experiment.config.layer_type, dropout=experiment.config.dropout)  # type: ignore
     model_variant = ModelVariant(
         name=config.layer_type,
         model=model,
@@ -599,9 +572,7 @@ def train_config_with_models(
         results: ExperimentResults | None = None
         for seed in experiment.config.seeds:
             set_random_seed(seed)
-            results = experiment.run(
-                train_dl, eval_dl, model_variants=[model_variant], device=device
-            )
+            results = experiment.run(train_dl, eval_dl, model_variants=[model_variant], device=device)
             torch._dynamo.reset()
     finally:
         # Ensure GPU memory is freed even on error

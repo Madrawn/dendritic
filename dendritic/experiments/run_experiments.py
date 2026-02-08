@@ -110,9 +110,7 @@ def _load_vcvars_environment(vcvars_path: str) -> bool:
     for attempt in range(MAX_ATTEMPTS):
         try:
             cmd = f'cmd.exe /d /c "{vcvars_path}" && set'
-            output = subprocess.check_output(
-                cmd, shell=False, text=True, stderr=subprocess.STDOUT, env=env
-            )
+            output = subprocess.check_output(cmd, shell=False, text=True, stderr=subprocess.STDOUT, env=env)
 
             for line in output.splitlines():
                 if "=" in line:
@@ -345,7 +343,7 @@ def main() -> None:
     logger.info(f"Running experiment(s): {args.experiment}")
     logger.info(f"Device: {args.device}")
 
-    if args.experiment in ["pretraining", "both"]:
+    if args.experiment in {"pretraining", "both"}:
         logger.info("\n" + "=" * 70)
         logger.info("RUNNING PRETRAINING EXPERIMENT")
         logger.info("=" * 70)
@@ -363,7 +361,7 @@ def main() -> None:
             param_grid=param_grid,
         )
 
-    if args.experiment in ["finetuning", "both"]:
+    if args.experiment in {"finetuning", "both"}:
         logger.info("\n" + "=" * 70)
         logger.info("RUNNING FINETUNING EXPERIMENT")
         logger.info("=" * 70)
@@ -389,7 +387,7 @@ def main() -> None:
         BATCH_SIZE = 5
         config = ConfidenceExperimentConfig(
             # Reasonable for PoC
-            training_steps=math.floor(15000 / BATCH_SIZE**2) * BATCH_SIZE,
+            training_steps=math.floor(35000 / BATCH_SIZE**2) * BATCH_SIZE,
             seeds=[42],
             batch_size=BATCH_SIZE,
             vocab_size=50257,  # GPT-2 vocab size
@@ -398,9 +396,11 @@ def main() -> None:
             num_layers=8,
             max_seq_len=256,
             dropout=0.0,
-            scheduler_type="cosine",
+            scheduler_type="no",
             results_dir="results/confidence_experiments",
             dataset="tinystories",
+            do_compile=True,
+            min_eval_improvement=0.01,
         )
 
         # Calculate appropriate max_samples based on training configuration
@@ -416,16 +416,12 @@ def main() -> None:
         # Run the experiment
         experiment = ConfidenceAwareExperiment(config)
         experiment.run(tokenizer)
-        logger.info(
-            f"Confidence experiment completed. Results saved to {config.results_dir}"
-        )
+        logger.info(f"Confidence experiment completed. Results saved to {config.results_dir}")
 
     logger.info("\nAll experiments complete!")
 
 
-def run_finetuning_experiment_wrapper(
-    device: str, num_workers: int | None = None
-) -> FinetuningExperimentResults:
+def run_finetuning_experiment_wrapper(device: str, num_workers: int | None = None) -> FinetuningExperimentResults:
     """Run the finetuning experiment across configured seeds.
 
     Parameters
@@ -447,9 +443,7 @@ def run_finetuning_experiment_wrapper(
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
 
-    config = FinetuningConfig(
-        training_steps=30, batch_size=4, eval_interval=250, seeds=[42, 71, 123]
-    )
+    config = FinetuningConfig(training_steps=30, batch_size=4, eval_interval=250, seeds=[42, 71, 123])
 
     train_dl, eval_dl = load_finetuning_data(
         tokenizer,
