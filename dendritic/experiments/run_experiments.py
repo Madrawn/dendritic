@@ -7,6 +7,7 @@ Usage:
     python -m dendritic.experiments.run_experiments --experiment finetuning
     python -m dendritic.experiments.run_experiments --experiment both
     python -m dendritic.experiments.run_experiments --experiment doubt
+    python -m dendritic.experiments.run_experiments --experiment self_conditioned
 """
 
 # Standard library imports
@@ -313,7 +314,7 @@ def main() -> None:
     parser.add_argument(
         "--experiment",
         type=str,
-        choices=["pretraining", "finetuning", "both", "doubt"],
+        choices=["pretraining", "finetuning", "both", "doubt", "self_conditioned"],
         default="both",
         help="Which experiment to run",
     )
@@ -434,6 +435,59 @@ def main() -> None:
         experiment = DoubtAwareExperiment(config)
         experiment.run(tokenizer)
         logger.info(f"Doubt experiment completed. Results saved to {config.results_dir}")
+
+    if args.experiment == "self_conditioned":
+        # Import here to avoid circular imports
+        from dendritic.experiments.self_conditioned.config import SelfConditionedExperimentConfig
+        from dendritic.experiments.self_conditioned.experiment import (
+            SelfConditionedExperiment,
+        )
+
+        logger.info("\n" + "=" * 70)
+        logger.info("RUNNING SELF-CONDITIONED EXPERIMENT")
+        logger.info("=" * 70)
+        tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        tokenizer.pad_token = tokenizer.eos_token
+
+        # Create configuration with reasonable defaults
+        NUM_HEADS = 6
+        HEAD_DIM = 100
+        BATCH_SIZE = 5
+        config = SelfConditionedExperimentConfig(
+            training_steps=math.floor(55000 / BATCH_SIZE**2) * BATCH_SIZE,
+            seeds=[42],
+            batch_size=BATCH_SIZE,
+            vocab_size=50257,
+            embed_dim=NUM_HEADS * HEAD_DIM,
+            num_heads=NUM_HEADS,
+            num_layers=8,
+            max_seq_len=512,
+            dropout=0.0,
+            scheduler_type="no",
+            results_dir="results/self_conditioned_experiments",
+            dataset="tinystories",
+            do_compile=True,
+            min_eval_improvement=0.0,
+            seq_stride=128,
+            grouped=True,
+            # Self-conditioned specific
+            bound_fn="none",
+            take_meta=3,
+        )
+
+        # Calculate appropriate max_samples based on training configuration
+        required_max_samples = calculate_required_max_samples(config)
+        config.dataset_kwargs = {"max_samples": required_max_samples}
+
+        logger.info(
+            f"Calculated max_samples: {required_max_samples} "
+            f"(based on {config.training_steps} steps, batch_size={config.batch_size})"
+        )
+
+        # Run the experiment
+        experiment = SelfConditionedExperiment(config)
+        experiment.run(tokenizer)
+        logger.info(f"Self-conditioned experiment completed. Results saved to {config.results_dir}")
 
     logger.info("\nAll experiments complete!")
 
