@@ -80,11 +80,7 @@ def group_texts_func(examples, max_seq_len):
     """
     # Only concatenate columns that are lists of lists (token IDs)
     # This prevents errors if 'text' or other metadata columns are still present
-    concatenated = {
-        k: sum(examples[k], [])
-        for k in examples.keys()
-        if isinstance(examples[k][0], list)
-    }
+    concatenated = {k: sum(examples[k], []) for k in examples.keys() if isinstance(examples[k][0], list)}
 
     # Total length of the concatenated sequences
     total_length = len(next(iter(concatenated.values())))
@@ -94,10 +90,63 @@ def group_texts_func(examples, max_seq_len):
         total_length = (total_length // max_seq_len) * max_seq_len
 
     # Split into chunks of max_seq_len
-    result = {
-        k: [t[i : i + max_seq_len] for i in range(0, total_length, max_seq_len)]
-        for k, t in concatenated.items()
-    }
+    result = {k: [t[i : i + max_seq_len] for i in range(0, total_length, max_seq_len)] for k, t in concatenated.items()}
+
+    # Standard LLM pretraining usually predicts the next token,
+    # so we often create labels here if they don't exist
+    if "input_ids" in result:
+        result["labels"] = result["input_ids"].copy()
+
+    return result
+
+
+def sliding_window_group_texts_func(examples, max_seq_len, seq_stride):
+    """
+    Sliding window grouping logic.
+    Creates overlapping chunks with configurable stride.
+
+    Args:
+        examples: Input examples with token IDs
+        max_seq_len: Maximum sequence length for each chunk
+        seq_stride: Stride between consecutive chunks (0 = no overlap, 1 = max overlap)
+
+    Returns:
+        Dictionary with chunked sequences
+    """
+    # Only concatenate columns that are lists of lists (token IDs)
+    # Handle empty input gracefully
+    concatenated = {}
+    for k in examples.keys():
+        if examples[k] and isinstance(examples[k][0], list):
+            concatenated[k] = sum(examples[k], [])
+
+    # Return empty result if no valid data
+    if not concatenated:
+        return {}
+
+    # Total length of the concatenated sequences
+    total_length = len(next(iter(concatenated.values())))
+
+    # Calculate number of chunks based on stride
+    if seq_stride == 0:
+        # Use original non-overlapping logic
+        if total_length >= max_seq_len:
+            total_length = (total_length // max_seq_len) * max_seq_len
+        result = {
+            k: [t[i : i + max_seq_len] for i in range(0, total_length, max_seq_len)] for k, t in concatenated.items()
+        }
+    else:
+        # Sliding window with overlap
+        num_chunks = max(1, (total_length - max_seq_len) // seq_stride + 1)
+
+        # Ensure we don't go past the end
+        if num_chunks > 0:
+            total_length = min(total_length, max_seq_len + (num_chunks - 1) * seq_stride)
+
+        result = {
+            k: [t[i : i + max_seq_len] for i in range(0, total_length - max_seq_len + 1, seq_stride)]
+            for k, t in concatenated.items()
+        }
 
     # Standard LLM pretraining usually predicts the next token,
     # so we often create labels here if they don't exist
@@ -130,9 +179,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
             self.dataset_name = dataset_name
         # Ensure dataset_name is set
         if not self.dataset_name:
-            raise ValueError(
-                "dataset_name must be provided either via class attribute or constructor"
-            )
+            raise ValueError("dataset_name must be provided either via class attribute or constructor")
 
     def _get_separator_token_ids(self, group_separator):
         """
@@ -151,18 +198,14 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         if group_separator == "EOS_token":
             eos = self.tokenizer.eos_token_id
             if eos is None:
-                raise ValueError(
-                    "Tokenizer does not have an eos_token_id. "
-                    "Please provide a custom separator string."
-                )
+                raise ValueError("Tokenizer does not have an eos_token_id. Please provide a custom separator string.")
             return [eos]
         elif group_separator == "EOS_BOS_tokens":
             eos = self.tokenizer.eos_token_id
             bos = self.tokenizer.bos_token_id
             if eos is None or bos is None:
                 raise ValueError(
-                    "Tokenizer missing eos_token_id or bos_token_id. "
-                    "Please provide a custom separator string."
+                    "Tokenizer missing eos_token_id or bos_token_id. Please provide a custom separator string."
                 )
             return [eos, bos]
         else:
@@ -222,9 +265,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         # 2. If we got a DatasetDict / IterableDatasetDict, extract the split
         if isinstance(ds, (DatasetDict, IterableDatasetDict)):
             if split not in ds:
-                raise ValueError(
-                    f"Split '{split}' not found in dataset {self.dataset_name}"
-                )
+                raise ValueError(f"Split '{split}' not found in dataset {self.dataset_name}")
             ds = ds[split]
 
         # 3. Convert IterableDataset to regular Dataset and limit to max_samples
@@ -233,9 +274,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
             ds_head = ds.take(max_samples)
             samples = list(ds_head)
             if not samples:
-                raise ValueError(
-                    f"No samples retrieved from dataset {self.dataset_name}"
-                )
+                raise ValueError(f"No samples retrieved from dataset {self.dataset_name}")
             ds = Dataset.from_list(samples)
         else:
             # Non‑streaming Dataset: select up to max_samples
@@ -294,9 +333,7 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
         result["labels"] = labels
         return result
 
-    def tokenize_for_pretraining(
-        self, examples: dict[str, Any], append_newline: bool = True
-    ) -> dict[str, Any]:
+    def tokenize_for_pretraining(self, examples: dict[str, Any], append_newline: bool = True) -> dict[str, Any]:
         """
         Tokenize a batch of text examples for pretraining (no padding, no truncation).
 
@@ -392,9 +429,17 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
             # 2. Group (Pack)
             # This replaces your custom generator.
             # batched=True allows access to multiple samples to pack them efficiently.
-            processed_stream = tokenized_stream.map(
-                partial(group_texts_func, max_seq_len=config.max_seq_len), batched=True
-            )
+            if hasattr(config, "seq_stride"):
+                processed_stream = tokenized_stream.map(
+                    partial(
+                        sliding_window_group_texts_func, max_seq_len=config.max_seq_len, seq_stride=config.seq_stride
+                    ),
+                    batched=True,
+                )
+            else:
+                processed_stream = tokenized_stream.map(
+                    partial(group_texts_func, max_seq_len=config.max_seq_len), batched=True
+                )
 
         else:
             # Ungrouped pipeline
@@ -423,12 +468,10 @@ class TextCorpusHandler(BaseDatasetHandler, ABC):
 
         test_dataset = cast(
             TorchDataset,
-            Dataset.from_dict(
-                {
-                    "input_ids": [b["input_ids"] for b in test_blocks],
-                    "labels": [b["labels"] for b in test_blocks],
-                }
-            ).with_format("torch"),
+            Dataset.from_dict({
+                "input_ids": [b["input_ids"] for b in test_blocks],
+                "labels": [b["labels"] for b in test_blocks],
+            }).with_format("torch"),
         )
         # test_dataset = processed_stream.take(int(test_blocks_needed)).with_format(
         # "torch"

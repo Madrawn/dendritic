@@ -21,7 +21,7 @@ def sample_tokens_from_model(
     top_p: float = 0.95,
     device: str = "cuda",
     use_confidence: bool = False,
-) -> tuple[str, list[float] | None]:
+) -> tuple[str, list[float] | None, list[int] | None, list[int] | None]:
     """
     Sample tokens from a MiniGPT or ConfidenceAwareGPT model using autoregressive generation.
 
@@ -44,16 +44,22 @@ def sample_tokens_from_model(
                        If False, uses default zeros (None).
 
     Returns:
-        tuple: (generated_text, confidence_predictions)
+        tuple: (generated_text, confidence_predictions, generated_token_ids, full_token_ids)
         - generated_text: Generated text (including prompt)
         - confidence_predictions: List of confidence predictions for each generated token,
                                  or None if model is not ConfidenceAwareGPT
+        - generated_token_ids: List of token IDs for generated tokens only
+        - full_token_ids: Complete sequence of token IDs (prompt + generated)
     """
     model.eval()
 
     # Encode prompt
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
     generated = input_ids.clone()
+
+    # Track generated token IDs (excluding prompt tokens)
+    generated_token_ids = []
+    full_token_ids = input_ids[0].tolist()  # Start with prompt token IDs
 
     # Track confidence predictions if model is ConfidenceAwareGPT
     is_confidence_model = hasattr(model, "confidence_predictor")
@@ -69,7 +75,7 @@ def sample_tokens_from_model(
         max_new_tokens = model_max_len - current_len
         logging.warning(f"Truncating generation to {max_new_tokens} tokens to respect max_seq_len={model_max_len}")
     if max_new_tokens <= 0:
-        return tokenizer.decode(input_ids[0]), None
+        return tokenizer.decode(input_ids[0]), None, [], input_ids[0].tolist()
     if max_new_tokens > 1000:  # Reasonable upper limit
         logging.warning(f"max_new_tokens ({max_new_tokens}) is very large, may cause memory issues")
     with torch.no_grad():
@@ -135,13 +141,50 @@ def sample_tokens_from_model(
             # Append to generated sequence
             generated = torch.cat([generated, next_token], dim=-1)
 
+            # Track generated token IDs
+            generated_token_ids.append(next_token.item())
+            full_token_ids.append(next_token.item())
+
             # Stop if we generate EOS token
             if next_token.item() == tokenizer.eos_token_id:
                 break
 
     # Decode the full sequence
     full_text = tokenizer.decode(generated[0], skip_special_tokens=True)
-    return full_text, confidence_predictions_list
+    return full_text, confidence_predictions_list, generated_token_ids, full_token_ids
+
+
+def format_tokens_with_confidence(
+    tokenizer, generated_token_ids: list[int], confidence_predictions: list[float], confidence_precision: int = 1
+) -> str:
+    """
+    Format tokens with confidence scores in parentheses.
+
+    Args:
+        tokenizer: Tokenizer with decode method
+        generated_token_ids: List of token IDs for generated tokens
+        confidence_predictions: List of confidence scores for each generated token
+        confidence_precision: Number of decimal places for confidence scores
+
+    Returns:
+        Formatted string like "token1(8.8) token2(7.1)"
+    """
+    if len(generated_token_ids) != len(confidence_predictions):
+        raise ValueError(
+            f"Token count ({len(generated_token_ids)}) doesn't match confidence count ({len(confidence_predictions)})"
+        )
+
+    formatted_parts = []
+    for token_id, confidence in zip(generated_token_ids, confidence_predictions):
+        # Decode single token
+        token_text = tokenizer.decode([token_id], skip_special_tokens=True)
+        # Clean up whitespace (tokenizer.decode might add spaces)
+        token_text = token_text.strip()
+        # Format with confidence
+        confidence_str = f"{confidence:.{confidence_precision}f}"
+        formatted_parts.append(f"{token_text}({confidence_str})")
+
+    return " ".join(formatted_parts)
 
 
 def sample_model_output(
@@ -153,7 +196,8 @@ def sample_model_output(
     temperature: float = 1.0,
     top_p: float = 0.95,
     use_confidence: bool = False,
-) -> tuple[str, list[float] | None]:
+    include_confidence_formatting: bool = True,
+) -> tuple[str, list[float] | None, str | None]:
     """
     Generate sample output from model and return as string.
 
@@ -169,14 +213,16 @@ def sample_model_output(
         temperature: Sampling temperature
         top_p: Top-p sampling parameter
         use_confidence: Whether to use confidence predictions for ConfidenceAwareGPT models
+        include_confidence_formatting: Whether to include formatted tokens with confidence
 
     Returns:
-        tuple: (generated_text, confidence_predictions)
+        tuple: (generated_text, confidence_predictions, formatted_tokens_with_confidence)
         - generated_text: Generated text
         - confidence_predictions: List of confidence predictions or None
+        - formatted_tokens_with_confidence: Formatted tokens with confidence scores or None
     """
     try:
-        generated, confidence_predictions = sample_tokens_from_model(
+        generated, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
             model=model,
             tokenizer=tokenizer,
             prompt=prompt,
@@ -186,7 +232,18 @@ def sample_model_output(
             device=device,
             use_confidence=use_confidence,
         )
-        return generated, confidence_predictions
+
+        formatted_tokens = None
+        if include_confidence_formatting and confidence_predictions is not None:
+            formatted_tokens = format_tokens_with_confidence(
+                tokenizer=tokenizer,
+                generated_token_ids=generated_token_ids,
+                confidence_predictions=confidence_predictions,
+                confidence_precision=1,
+            )
+
+        return generated, confidence_predictions, formatted_tokens
+
     except Exception as e:
         logger.error(f"Error during sampling: {e}")
-        return f"[Sampling error: {e}]", None
+        return f"[Sampling error: {e}]", None, None

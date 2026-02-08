@@ -1,5 +1,5 @@
 from typing import Literal
-from .MetaAwareBlock import DirectMetaAwareBlock as MetaAwareBlock
+from .MetaAwareBlock import AdaptiveMetaAwareBlock as MetaAwareBlock
 from .BaselineMLP import BaselineMLP
 from .DendriticPretrainingMLP import DendriticPretrainingMLP
 from .DendriticStackPretrainingMLP import DendriticStackPretrainingMLP

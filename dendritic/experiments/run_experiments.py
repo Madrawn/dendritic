@@ -186,6 +186,7 @@ def calculate_required_max_samples(config) -> int:
 
     When grouped=False (default), each sample produces at most 1 block.
     When grouped=True, samples are concatenated and can produce multiple blocks.
+    If seq_stride > 0 (sliding window), each sample produces more blocks due to overlap.
 
     Returns:
         Appropriate max_samples value
@@ -198,12 +199,25 @@ def calculate_required_max_samples(config) -> int:
     total_blocks = train_blocks + test_blocks
 
     if getattr(config, "grouped", False):
-        # When grouped=True, samples are concatenated
-        # Average blocks per sample depends on average tokens per sample
-        # Conservative estimate: avg_tokens_per_sample = 2048
+        # When grouped=True, samples are concatenated and can produce multiple blocks.
+        # Estimate average tokens per sample (conservative)
         avg_tokens_per_sample = 2048
-        blocks_per_sample = avg_tokens_per_sample / config.max_seq_len
-        safety_factor = 1.5  # Account for variability
+
+        # Determine seq_stride: check config.seq_stride or dataset_kwargs
+        seq_stride = getattr(config, "seq_stride", 0)
+        if seq_stride == 0 and hasattr(config, "dataset_kwargs"):
+            seq_stride = config.dataset_kwargs.get("seq_stride", 0)
+
+        if seq_stride == 0:
+            # Non-overlapping chunks: blocks_per_sample ≈ avg_tokens_per_sample / max_seq_len
+            blocks_per_sample = avg_tokens_per_sample / config.max_seq_len
+        else:
+            # Sliding window with overlap: blocks ≈ (tokens - max_seq_len) / seq_stride + 1
+            # Approximate per-sample contribution
+            blocks_per_sample = (avg_tokens_per_sample - config.max_seq_len) / seq_stride + 1
+            blocks_per_sample = max(1, blocks_per_sample)  # Ensure at least 1
+
+        safety_factor = 1.5  # Account for variability in sample lengths
         required_samples = int(total_blocks / blocks_per_sample * safety_factor)
     else:
         # When grouped=False, each sample produces at most 1 block
@@ -387,20 +401,23 @@ def main() -> None:
         BATCH_SIZE = 5
         config = ConfidenceExperimentConfig(
             # Reasonable for PoC
-            training_steps=math.floor(35000 / BATCH_SIZE**2) * BATCH_SIZE,
+            training_steps=math.floor(55000 / BATCH_SIZE**2) * BATCH_SIZE,
             seeds=[42],
             batch_size=BATCH_SIZE,
             vocab_size=50257,  # GPT-2 vocab size
             embed_dim=NUM_HEADS * HEAD_DIM,
             num_heads=NUM_HEADS,
             num_layers=8,
-            max_seq_len=256,
+            max_seq_len=512,
+            eval_smoothing_factor=0.33,
             dropout=0.0,
             scheduler_type="no",
             results_dir="results/confidence_experiments",
             dataset="tinystories",
             do_compile=True,
-            min_eval_improvement=0.01,
+            min_eval_improvement=0.0,
+            seq_stride=128,  # 0=no overlap, 1=max overlap, 2=every other, etc.
+            grouped=True,  # Required for sliding window to be used
         )
 
         # Calculate appropriate max_samples based on training configuration

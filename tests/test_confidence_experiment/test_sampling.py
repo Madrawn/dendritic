@@ -17,13 +17,46 @@ class MockTokenizer:
 
     def __init__(self):
         self.eos_token_id = 50256
+        # Map token IDs to their text representations
+        self.token_map = {
+            1: "Once",
+            2: "upon",
+            3: "a",
+            4: "time",
+            5: "was",
+            6: "the",
+            7: "day",
+            8: "there",
+            9: "were",
+            10: "three",
+            50256: "",  # EOS token
+        }
 
     def encode(self, text, return_tensors="pt"):
         """Mock encode method."""
         return torch.tensor([[1, 2, 3, 4]])
 
     def decode(self, tokens, skip_special_tokens=True):
-        """Mock decode method."""
+        """Mock decode method that handles both single tokens and lists of tokens."""
+        if isinstance(tokens, torch.Tensor):
+            tokens = tokens.tolist()
+
+        # Handle single token
+        if isinstance(tokens, list) and len(tokens) == 1 and isinstance(tokens[0], int):
+            token_id = tokens[0]
+            if skip_special_tokens and token_id == self.eos_token_id:
+                return ""
+            return self.token_map.get(token_id, f"<token_{token_id}>")
+
+        # Handle list of tokens
+        if isinstance(tokens, list):
+            decoded_tokens = []
+            for token_id in tokens:
+                if skip_special_tokens and token_id == self.eos_token_id:
+                    continue
+                decoded_tokens.append(self.token_map.get(token_id, f"<token_{token_id}>"))
+            return " ".join(decoded_tokens)
+
         return "Mock generated text"
 
 
@@ -64,7 +97,7 @@ def test_sample_tokens_from_model_minigpt():
     tokenizer = MockTokenizer()
 
     # Test basic sampling
-    text, confidence_predictions = sample_tokens_from_model(
+    text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -75,7 +108,7 @@ def test_sample_tokens_from_model_minigpt():
     )
 
     assert isinstance(text, str)
-    assert "Mock generated text" in text
+    assert "Once" in text  # Should contain the decoded prompt tokens
     assert confidence_predictions is None  # MiniGPT doesn't have confidence predictions
 
 
@@ -86,7 +119,7 @@ def test_sample_tokens_from_model_confidence_aware():
     tokenizer = MockTokenizer()
 
     # Test basic sampling
-    text, confidence_predictions = sample_tokens_from_model(
+    text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -97,7 +130,7 @@ def test_sample_tokens_from_model_confidence_aware():
     )
 
     assert isinstance(text, str)
-    assert "Mock generated text" in text
+    assert "Once" in text  # Should contain the decoded prompt tokens
     assert confidence_predictions is not None
     assert len(confidence_predictions) == 5  # Should have 5 confidence predictions for 5 new tokens
 
@@ -109,7 +142,7 @@ def test_sample_tokens_from_model_top_p_sampling():
     tokenizer = MockTokenizer()
 
     # Test with top_p < 1.0
-    text, confidence_predictions = sample_tokens_from_model(
+    text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -130,7 +163,7 @@ def test_sample_tokens_from_model_temperature():
     tokenizer = MockTokenizer()
 
     # Test with different temperatures
-    text_low_temp, conf_low = sample_tokens_from_model(
+    text_low_temp, conf_low, generated_token_ids_low, full_token_ids_low = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -140,7 +173,7 @@ def test_sample_tokens_from_model_temperature():
         device="cpu",
     )
 
-    text_high_temp, conf_high = sample_tokens_from_model(
+    text_high_temp, conf_high, generated_token_ids_high, full_token_ids_high = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -164,7 +197,7 @@ def test_sample_model_output_error_handling():
 
     # Mock an error during sampling
     with patch.object(model, "forward", side_effect=RuntimeError("Test error")):
-        text, confidence_predictions = sample_model_output(
+        text, confidence_predictions, formatted_tokens = sample_model_output(
             model=model,
             tokenizer=tokenizer,
             prompt="Test prompt",
@@ -195,7 +228,7 @@ def test_sample_tokens_from_model_eos_stopping():
     tokenizer.decode = mock_decode
 
     try:
-        text, confidence_predictions = sample_tokens_from_model(
+        text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
             model=model,
             tokenizer=tokenizer,
             prompt="Test prompt",
@@ -242,7 +275,7 @@ def test_confidence_aware_gpt_forward_calls():
     tokenizer = MockTokenizer()
 
     # Test with use_confidence=True
-    text, confidence_predictions = sample_tokens_from_model(
+    text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -330,7 +363,7 @@ def test_confidence_aware_gpt_confidence_values():
     tokenizer = MockTokenizer()
 
     # Test with use_confidence=True
-    text, confidence_predictions = sample_tokens_from_model(
+    text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -369,6 +402,179 @@ def test_confidence_aware_gpt_confidence_values():
     expected_confidences = [0.8, 0.9, 1.0]
     for i, (actual, expected) in enumerate(zip(confidence_predictions, expected_confidences)):
         assert abs(actual - expected) < 0.01, f"Confidence prediction {i}: expected {expected}, got {actual}"
+
+
+@pytest.mark.unit
+def test_format_tokens_with_confidence():
+    """Test the format_tokens_with_confidence function."""
+    from dendritic.experiments.confidence.sampling_utils import format_tokens_with_confidence
+
+    tokenizer = MockTokenizer()
+
+    # Test basic formatting
+    generated_token_ids = [5, 6, 7]  # "was", "the", "day"
+    confidence_predictions = [8.5, 7.2, 6.8]
+
+    result = format_tokens_with_confidence(
+        tokenizer=tokenizer,
+        generated_token_ids=generated_token_ids,
+        confidence_predictions=confidence_predictions,
+        confidence_precision=1,
+    )
+
+    expected = "was(8.5) the(7.2) day(6.8)"
+    assert result == expected
+
+
+@pytest.mark.unit
+def test_format_tokens_with_confidence_whitespace_stripping():
+    """Test that whitespace is properly stripped from decoded tokens."""
+    from dendritic.experiments.confidence.sampling_utils import format_tokens_with_confidence
+
+    class WhitespaceTokenizer(MockTokenizer):
+        def decode(self, tokens, skip_special_tokens=True):
+            # Add leading space to simulate some tokenizers
+            if isinstance(tokens, list) and len(tokens) == 1:
+                return f" {self.token_map.get(tokens[0], f'<token_{tokens[0]}>')}"
+            return super().decode(tokens, skip_special_tokens)
+
+    tokenizer = WhitespaceTokenizer()
+    generated_token_ids = [5, 6, 7]  # " was", " the", " day"
+    confidence_predictions = [8.5, 7.2, 6.8]
+
+    result = format_tokens_with_confidence(
+        tokenizer=tokenizer,
+        generated_token_ids=generated_token_ids,
+        confidence_predictions=confidence_predictions,
+        confidence_precision=1,
+    )
+
+    expected = "was(8.5) the(7.2) day(6.8)"  # Should be stripped of leading spaces
+    assert result == expected
+
+
+@pytest.mark.unit
+def test_format_tokens_with_confidence_validation():
+    """Test that format_tokens_with_confidence validates token count match."""
+    from dendritic.experiments.confidence.sampling_utils import format_tokens_with_confidence
+
+    tokenizer = MockTokenizer()
+
+    # Test mismatched lengths
+    generated_token_ids = [5, 6]  # 2 tokens
+    confidence_predictions = [8.5]  # 1 confidence value
+
+    with pytest.raises(ValueError, match="Token count .* doesn't match confidence count"):
+        format_tokens_with_confidence(
+            tokenizer=tokenizer,
+            generated_token_ids=generated_token_ids,
+            confidence_predictions=confidence_predictions,
+        )
+
+
+@pytest.mark.unit
+def test_format_tokens_with_confidence_precision():
+    """Test different precision levels for confidence scores."""
+    from dendritic.experiments.confidence.sampling_utils import format_tokens_with_confidence
+
+    tokenizer = MockTokenizer()
+    generated_token_ids = [5, 6]
+    confidence_predictions = [8.56789, 7.23456]
+
+    # Test 0 decimal places
+    result_0 = format_tokens_with_confidence(
+        tokenizer=tokenizer,
+        generated_token_ids=generated_token_ids,
+        confidence_predictions=confidence_predictions,
+        confidence_precision=0,
+    )
+    expected_0 = "was(9) the(7)"
+    assert result_0 == expected_0
+
+    # Test 2 decimal places
+    result_2 = format_tokens_with_confidence(
+        tokenizer=tokenizer,
+        generated_token_ids=generated_token_ids,
+        confidence_predictions=confidence_predictions,
+        confidence_precision=2,
+    )
+    expected_2 = "was(8.57) the(7.23)"
+    assert result_2 == expected_2
+
+
+@pytest.mark.unit
+def test_sample_tokens_from_model_returns_token_ids():
+    """Test that sample_tokens_from_model returns token IDs correctly."""
+    from dendritic.experiments.confidence.sampling_utils import sample_tokens_from_model
+
+    model = MockMiniGPT()
+    tokenizer = MockTokenizer()
+
+    text, confidence_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
+        model=model,
+        tokenizer=tokenizer,
+        prompt="Test prompt",
+        max_new_tokens=3,
+        device="cpu",
+    )
+
+    # Check that all return values are present
+    assert isinstance(text, str)
+    assert confidence_predictions is None  # MiniGPT doesn't have confidence
+    assert isinstance(generated_token_ids, list)
+    assert isinstance(full_token_ids, list)
+    assert len(generated_token_ids) == 3  # Should have 3 generated tokens
+    assert len(full_token_ids) > 3  # Should include prompt tokens + generated tokens
+
+
+@pytest.mark.unit
+def test_sample_model_output_with_confidence_formatting():
+    """Test that sample_model_output returns formatted tokens when confidence is available."""
+    from dendritic.experiments.confidence.sampling_utils import sample_model_output
+
+    model = MockConfidenceAwareGPT()
+    tokenizer = MockTokenizer()
+
+    generated, confidence_predictions, formatted_tokens = sample_model_output(
+        model=model,
+        tokenizer=tokenizer,
+        prompt="Test prompt",
+        device="cpu",
+        max_new_tokens=3,
+        include_confidence_formatting=True,
+    )
+
+    assert isinstance(generated, str)
+    assert confidence_predictions is not None
+    assert len(confidence_predictions) == 3
+    assert formatted_tokens is not None
+    # Check that formatted tokens contain confidence scores in parentheses
+    assert "(" in formatted_tokens and ")" in formatted_tokens
+    # Check that we have the expected number of formatted tokens
+    assert len(formatted_tokens.split()) == 3  # Should have 3 formatted tokens
+
+
+@pytest.mark.unit
+def test_sample_model_output_backward_compatibility():
+    """Test that sample_model_output maintains backward compatibility."""
+    from dendritic.experiments.confidence.sampling_utils import sample_model_output
+
+    model = MockMiniGPT()
+    tokenizer = MockTokenizer()
+
+    # Test without confidence formatting (old behavior)
+    generated, confidence_predictions, formatted_tokens = sample_model_output(
+        model=model,
+        tokenizer=tokenizer,
+        prompt="Test prompt",
+        device="cpu",
+        max_new_tokens=3,
+        include_confidence_formatting=False,
+    )
+
+    # Should still work with old tuple unpacking (though this will cause type errors in IDE)
+    assert isinstance(generated, str)
+    assert confidence_predictions is None
 
 
 if __name__ == "__main__":

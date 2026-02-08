@@ -94,7 +94,7 @@ class PretrainingConfig(AutoVivifyMixin):
     # Evaluation
     effective_eval_interval: int | None = None  # If None, computed as training_steps // 20
 
-    eval_batches: int = 15
+    eval_batches: int = 25
 
     # Experiment
     seeds: list[int] = field(default_factory=lambda: [42, 123, 456, 789, 1011])
@@ -107,6 +107,7 @@ class PretrainingConfig(AutoVivifyMixin):
     grouped: bool = False
     group_separator: Literal["EOS_token", "EOS_BOS_tokens"] | str = "EOS_token"
     dataset_kwargs: dict = field(default_factory=dict)
+    seq_stride: int = 0  # 0 = no overlap, 1 = max overlap, higher = less overlap
 
     baseline_hidden_dim: int = 0
     dendritic_hidden_dim: int = 0

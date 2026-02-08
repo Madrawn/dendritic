@@ -189,7 +189,7 @@ class UnifiedTrainer:
             # Only for ConfidenceAwareGPT models
             use_confidence = hasattr(model, "confidence_predictor")
 
-            generated, confidence_predictions = sample_model_output(
+            generated, confidence_predictions, formatted_tokens_with_confidence = sample_model_output(
                 model=model,
                 tokenizer=self.tokenizer,
                 prompt=self.config.sampling_prompt,
@@ -198,6 +198,7 @@ class UnifiedTrainer:
                 temperature=self.config.sampling_temperature,
                 top_p=self.config.sampling_top_p,
                 use_confidence=use_confidence,
+                include_confidence_formatting=True,
             )
 
             # Log truncated version to console
@@ -219,6 +220,7 @@ class UnifiedTrainer:
                 eval_loss=eval_loss,
                 sampled_text=generated,
                 confidence_predictions=confidence_predictions,
+                formatted_tokens_with_confidence=formatted_tokens_with_confidence,
             )
 
         except Exception as e:
@@ -232,6 +234,7 @@ class UnifiedTrainer:
         eval_loss,
         sampled_text,
         confidence_predictions=None,
+        formatted_tokens_with_confidence=None,
     ):
         """
         Save sampled tokens to text file alongside JSON results.
@@ -266,6 +269,10 @@ class UnifiedTrainer:
             if confidence_predictions is not None and len(confidence_predictions) > 0:
                 f.write(f"Confidence Predictions: {confidence_predictions}\n")
                 f.write(f"Avg Confidence: {sum(confidence_predictions) / len(confidence_predictions):.4f}\n")
+
+                # Add formatted tokens with confidence if available
+                if formatted_tokens_with_confidence is not None:
+                    f.write(f"Sampled Tokens with Confidence: {formatted_tokens_with_confidence}\n")
 
             f.write("=" * 40 + "\n\n")
 
@@ -474,7 +481,7 @@ class UnifiedTrainer:
                 self._sample_and_log(model, step + 1, eval_loss, seed)
 
                 smoothing_factor = getattr(self.config, "eval_smoothing_factor", 0.5)
-                avg_eval_loss = avg_eval_loss * smoothing_factor + (1 - smoothing_factor) * eval_loss
+                avg_eval_loss = avg_eval_loss * (1 - smoothing_factor) + smoothing_factor * eval_loss
                 perplexity = np.exp(eval_loss)
 
                 if avg_eval_loss < best_eval_loss:
