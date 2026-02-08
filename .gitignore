@@ -13,3 +13,4 @@ test_model_state.pt
 confidence_summary_stats.json
 test_run_summary_stats.json
 .kilocode/
+**/Strawberry
