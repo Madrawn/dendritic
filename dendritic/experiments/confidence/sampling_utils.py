@@ -8,24 +8,38 @@ built-in `.generate()` methods.
 import torch
 import torch.nn as nn
 import logging
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SamplingConfig:
+    """Configuration for token sampling.
+
+    Encapsulates all parameters needed for autoregressive sampling from
+    MiniGPT or ConfidenceAwareGPT models.
+    """
+
+    device: str = "cuda"
+    max_new_tokens: int = 50
+    temperature: float = 1.0
+    top_p: float = 0.95
+    use_confidence: bool = False
+    include_confidence_formatting: bool = True
 
 
 def sample_tokens_from_model(
     model: nn.Module,
     tokenizer,
     prompt: str,
-    max_new_tokens: int = 50,
-    temperature: float = 1.0,
-    top_p: float = 0.95,
-    device: str = "cuda",
-    use_confidence: bool = False,
-) -> tuple[str, list[float] | None, list[int] | None, list[int] | None]:
+    *,
+    config: SamplingConfig,
+) -> tuple[str, list[float] | None, list[int], list[int]]:
     """
     Sample tokens from a MiniGPT or ConfidenceAwareGPT model using autoregressive generation.
 
-    For ConfidenceAwareGPT models with use_confidence=True:
+    For ConfidenceAwareGPT models with config.use_confidence=True:
     - Start with confidence_scalars=None (model uses zeros)
     - For each generated token, get confidence prediction from model
     - Use that confidence prediction as input for next token (shifted right by 1)
@@ -35,13 +49,7 @@ def sample_tokens_from_model(
         model: MiniGPT or ConfidenceAwareGPT model
         tokenizer: Tokenizer with encode/decode methods
         prompt: Text prompt to start generation
-        max_new_tokens: Maximum number of tokens to generate
-        temperature: Sampling temperature (higher = more random)
-        top_p: Top-p (nucleus) sampling parameter
-        device: Device to run generation on
-        use_confidence: Whether to use confidence predictions for ConfidenceAwareGPT models.
-                       If True, uses confidence predictions from previous step as input.
-                       If False, uses default zeros (None).
+        config: Sampling configuration (SamplingConfig)
 
     Returns:
         tuple: (generated_text, confidence_predictions, generated_token_ids, full_token_ids)
@@ -54,7 +62,7 @@ def sample_tokens_from_model(
     model.eval()
 
     # Encode prompt
-    input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+    input_ids = tokenizer.encode(prompt, return_tensors="pt").to(config.device)
     generated = input_ids.clone()
 
     # Track generated token IDs (excluding prompt tokens)
@@ -66,77 +74,40 @@ def sample_tokens_from_model(
     confidence_predictions_list = [] if is_confidence_model else None
 
     # Initialize confidence scalars for the first step
-    # For confidence models with use_confidence=False, we pass None (model uses zeros)
-    # For confidence models with use_confidence=True, we'll build confidence scalars as we generate
+    # For confidence models with config.use_confidence=False, we pass None (model uses zeros)
+    # For confidence models with config.use_confidence=True, we'll build confidence scalars as we generate
     confidence_scalars = None
     model_max_len = model.max_seq_len
     current_len = input_ids.shape[1]
-    if current_len + max_new_tokens > model_max_len:
-        max_new_tokens = model_max_len - current_len
-        logging.warning(f"Truncating generation to {max_new_tokens} tokens to respect max_seq_len={model_max_len}")
-    if max_new_tokens <= 0:
+    effective_max_new_tokens = config.max_new_tokens
+    if current_len + effective_max_new_tokens > model_max_len:
+        effective_max_new_tokens = model_max_len - current_len
+        logging.warning(
+            f"Truncating generation to {effective_max_new_tokens} tokens to respect max_seq_len={model_max_len}"
+        )
+    if effective_max_new_tokens <= 0:
         return tokenizer.decode(input_ids[0]), None, [], input_ids[0].tolist()
-    if max_new_tokens > 1000:  # Reasonable upper limit
-        logging.warning(f"max_new_tokens ({max_new_tokens}) is very large, may cause memory issues")
+    if effective_max_new_tokens > 1000:  # Reasonable upper limit
+        logging.warning(f"max_new_tokens ({effective_max_new_tokens}) is very large, may cause memory issues")
     with torch.no_grad():
-        for i in range(max_new_tokens):
+        for _ in range(effective_max_new_tokens):
             # Get model output
-            if hasattr(model, "forward") and callable(model.forward):
-                if is_confidence_model:
-                    # ConfidenceAwareGPT returns dict with logits and confidence_pred
-                    outputs = model(generated, confidence_scalars=confidence_scalars)
-                    logits = outputs["logits"]
-                    confidence_pred = outputs["confidence_pred"]
+            logits, confidence_value = _get_model_logits(model, generated, is_confidence_model, confidence_scalars)
 
-                    # Store confidence prediction for the last position
-                    if confidence_pred is not None and confidence_predictions_list is not None:
-                        last_conf = confidence_pred[:, -1].item()
-                        confidence_predictions_list.append(last_conf)
+            # Store confidence prediction if available
+            if confidence_value is not None and confidence_predictions_list is not None:
+                confidence_predictions_list.append(confidence_value)
 
-                        # For next step, prepare confidence scalars
-                        if use_confidence:
-                            # Create confidence scalars tensor for NEXT forward call
-                            # The next forward call will have seq_len + 1 tokens (current + new token)
-                            next_seq_len = generated.shape[1] + 1
-                            conf_tensor = torch.zeros((1, next_seq_len, 1), device=device, dtype=torch.float32)
+            # Update confidence scalars for next iteration if using confidence model
+            if is_confidence_model and config.use_confidence:
+                # confidence_predictions_list is guaranteed to be not None when is_confidence_model is True
+                assert confidence_predictions_list is not None
+                confidence_scalars = _update_confidence_scalars_after_append(
+                    confidence_predictions_list, generated.shape[1] + 1, config.device
+                )
 
-                            # Fill with previous confidence predictions (shifted right by 1)
-                            # Position j gets confidence prediction from position j-1
-                            # We have confidence predictions for positions 0..(seq_len-1)
-                            # These need to go to positions 1..seq_len in the next forward call
-                            if len(confidence_predictions_list) > 0:
-                                fill_length = min(len(confidence_predictions_list), next_seq_len - 1)
-                                conf_tensor[0, 1 : 1 + fill_length, 0] = torch.tensor(
-                                    confidence_predictions_list[:fill_length], device=device, dtype=torch.float32
-                                )
-                            confidence_scalars = conf_tensor
-                else:
-                    # MiniGPT returns logits directly
-                    logits = model(generated)
-            else:
-                raise ValueError(f"Model doesn't have a forward method: {type(model)}")
-
-            # Get logits for the last token
-            next_token_logits = logits[:, -1, :] / temperature
-
-            # Apply top-p (nucleus) sampling
-            if top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
-
-                # Remove tokens with cumulative probability above top_p
-                sorted_indices_to_remove = cumulative_probs > top_p
-                # Shift the indices to the right to keep the first token above threshold
-                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                sorted_indices_to_remove[..., 0] = 0
-
-                # Create mask for indices to remove
-                indices_to_remove = sorted_indices[sorted_indices_to_remove]
-                next_token_logits[..., indices_to_remove] = -float("inf")
-
-            # Sample from the filtered distribution
-            probs = torch.softmax(next_token_logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
+            # Sample next token
+            next_token = _sample_next_token(logits, config.temperature, config.top_p)
 
             # Append to generated sequence
             generated = torch.cat([generated, next_token], dim=-1)
@@ -152,6 +123,64 @@ def sample_tokens_from_model(
     # Decode the full sequence
     full_text = tokenizer.decode(generated[0], skip_special_tokens=True)
     return full_text, confidence_predictions_list, generated_token_ids, full_token_ids
+
+
+def _get_model_logits(
+    model: nn.Module, generated: torch.Tensor, is_confidence_model: bool, confidence_scalars: torch.Tensor | None
+) -> tuple[torch.Tensor, float | None]:
+    """Get logits from model, handling both confidence and non-confidence models."""
+    if not hasattr(model, "forward") or not callable(model.forward):
+        raise ValueError(f"Model doesn't have a forward method: {type(model)}")
+
+    if is_confidence_model:
+        outputs = model(generated, confidence_scalars=confidence_scalars)
+        logits = outputs["logits"]
+        confidence_pred = outputs["confidence_pred"]
+        last_conf = None
+        if confidence_pred is not None:
+            last_conf = confidence_pred[:, -1].item()
+        return logits, last_conf
+    else:
+        logits = model(generated)
+        return logits, None
+
+
+def _update_confidence_scalars_after_append(
+    confidence_predictions_list: list, next_seq_len: int, device: str
+) -> torch.Tensor:
+    """Update confidence scalars for the next forward pass after appending a token."""
+    conf_tensor = torch.zeros((1, next_seq_len, 1), device=device, dtype=torch.float32)
+
+    if len(confidence_predictions_list) > 0:
+        fill_length = min(len(confidence_predictions_list), next_seq_len - 1)
+        conf_tensor[0, 1 : 1 + fill_length, 0] = torch.tensor(
+            confidence_predictions_list[:fill_length], device=device, dtype=torch.float32
+        )
+    return conf_tensor
+
+
+def _sample_next_token(logits: torch.Tensor, temperature: float, top_p: float) -> torch.Tensor:
+    """Sample next token from logits using temperature and top-p filtering."""
+    next_token_logits = logits[:, -1, :] / temperature
+
+    # Apply top-p (nucleus) sampling
+    if top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+        cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+
+        # Remove tokens with cumulative probability above top_p
+        sorted_indices_to_remove = cumulative_probs > top_p
+        # Shift the indices to the right to keep the first token above threshold
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = 0
+
+        # Create mask for indices to remove
+        indices_to_remove = sorted_indices[sorted_indices_to_remove]
+        next_token_logits[..., indices_to_remove] = -float("inf")
+
+    # Sample from the distribution
+    probs = torch.softmax(next_token_logits, dim=-1)
+    return torch.multinomial(probs, num_samples=1)
 
 
 def format_tokens_with_confidence(
@@ -191,12 +220,8 @@ def sample_model_output(
     model: nn.Module,
     tokenizer,
     prompt: str,
-    device: str = "cuda",
-    max_new_tokens: int = 50,
-    temperature: float = 1.0,
-    top_p: float = 0.95,
-    use_confidence: bool = False,
-    include_confidence_formatting: bool = True,
+    *,
+    config: SamplingConfig,
 ) -> tuple[str, list[float] | None, str | None]:
     """
     Generate sample output from model and return as string.
@@ -208,12 +233,7 @@ def sample_model_output(
         model: Model to sample from
         tokenizer: Tokenizer for encoding/decoding
         prompt: Text prompt
-        device: Device to run on
-        max_new_tokens: Maximum tokens to generate
-        temperature: Sampling temperature
-        top_p: Top-p sampling parameter
-        use_confidence: Whether to use confidence predictions for ConfidenceAwareGPT models
-        include_confidence_formatting: Whether to include formatted tokens with confidence
+        config: Sampling configuration (SamplingConfig)
 
     Returns:
         tuple: (generated_text, confidence_predictions, formatted_tokens_with_confidence)
@@ -226,15 +246,11 @@ def sample_model_output(
             model=model,
             tokenizer=tokenizer,
             prompt=prompt,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            device=device,
-            use_confidence=use_confidence,
+            config=config,
         )
 
         formatted_tokens = None
-        if include_confidence_formatting and confidence_predictions is not None:
+        if config.include_confidence_formatting and confidence_predictions is not None:
             formatted_tokens = format_tokens_with_confidence(
                 tokenizer=tokenizer,
                 generated_token_ids=generated_token_ids,

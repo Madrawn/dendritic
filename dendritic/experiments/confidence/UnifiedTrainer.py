@@ -183,22 +183,26 @@ class UnifiedTrainer:
         try:
             from dendritic.experiments.confidence.sampling_utils import (
                 sample_model_output,
+                SamplingConfig,
             )
 
             # Determine if we should use confidence-aware sampling
             # Only for ConfidenceAwareGPT models
             use_confidence = hasattr(model, "confidence_predictor")
 
-            generated, confidence_predictions, formatted_tokens_with_confidence = sample_model_output(
-                model=model,
-                tokenizer=self.tokenizer,
-                prompt=self.config.sampling_prompt,
+            sampling_config = SamplingConfig(
                 device=self.device,
                 max_new_tokens=self.config.sampling_max_tokens,
                 temperature=self.config.sampling_temperature,
                 top_p=self.config.sampling_top_p,
                 use_confidence=use_confidence,
                 include_confidence_formatting=True,
+            )
+            generated, confidence_predictions, formatted_tokens_with_confidence = sample_model_output(
+                model=model,
+                tokenizer=self.tokenizer,
+                prompt=self.config.sampling_prompt,
+                config=sampling_config,
             )
 
             # Log truncated version to console
