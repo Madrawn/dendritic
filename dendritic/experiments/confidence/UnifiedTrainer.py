@@ -26,7 +26,6 @@ import os
 import time
 from collections.abc import Generator, Iterable
 import os
-import subprocess
 
 
 import torch

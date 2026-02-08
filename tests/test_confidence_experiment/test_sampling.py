@@ -2,10 +2,11 @@
 Tests for token sampling functionality in confidence experiments.
 """
 
+import stat
 import pytest
 import torch
-import torch.nn as nn
-from unittest.mock import Mock, patch
+from torch import nn
+from unittest.mock import patch
 from dendritic.experiments.confidence.sampling_utils import (
     sample_tokens_from_model,
     sample_model_output,
@@ -33,7 +34,8 @@ class MockTokenizer:
             50256: "",  # EOS token
         }
 
-    def encode(self, text, return_tensors="pt"):
+    @staticmethod
+    def encode(text, return_tensors="pt"):
         """Mock encode method."""
         return torch.tensor([[1, 2, 3, 4]])
 
@@ -69,7 +71,7 @@ class MockMiniGPT(nn.Module):
         self.vocab_size = 1000
         self.max_seq_len = 10
 
-    def forward(self, input_ids):
+    def forward(self, input_ids, *args, **kwargs) -> dict[str, torch.Tensor] | torch.Tensor:
         """Mock forward method."""
         batch_size, seq_len = input_ids.shape
         return torch.randn(batch_size, seq_len, self.vocab_size)
@@ -82,7 +84,7 @@ class MockConfidenceAwareGPT(MockMiniGPT):
         super().__init__()
         self.confidence_predictor = nn.Linear(10, 1)
 
-    def forward(self, input_ids, confidence_scalars=None):
+    def forward(self, input_ids, confidence_scalars=None) -> dict[str, torch.Tensor] | torch.Tensor:
         """Mock forward method."""
         batch_size, seq_len = input_ids.shape
         return {

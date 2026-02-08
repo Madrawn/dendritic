@@ -297,13 +297,14 @@ class PretrainingExperiment:
                 # For MiniGPT: model returns logits
                 # For GPT2LMHeadModel: model returns CausalLMOutputWithCrossAttentions
                 if hasattr(model, "__class__") and "MiniGPT" in model.__class__.__name__:
+                    model = cast(MiniGPT, model)
                     # MiniGPT model - compute loss externally
-                    logits = model.forward(input_ids)  # type: ignore
+                    logits = model.forward(input_ids)
                     loss = compute_language_modeling_loss(logits, labels)
                 else:
                     # Hugging Face model - still returns loss
-                    model = cast(GPT2LMHeadModel, model)  # type: ignore
-                    outputs = model.forward(input_ids, labels=labels)  # type: ignore
+                    model = cast(GPT2LMHeadModel, model)
+                    outputs = cast(CausalLMOutputWithCrossAttentions, model.forward(input_ids, labels=labels))
                     loss = outputs["loss"]
 
             assert loss is not None, "Loss is None during training."
