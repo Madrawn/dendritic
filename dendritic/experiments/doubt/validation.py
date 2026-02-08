@@ -1,58 +1,59 @@
 """
-Validation and sanity check utilities for confidence-aware experiments.
+Validation and sanity check utilities for doubt-aware experiments.
 
 This module provides functions to validate experiment results, compare model
-parameters, and perform sanity checks on confidence predictions.
+parameters, and perform sanity checks on doubt predictions.
 """
 
 import torch
 import numpy as np
 from typing import Dict, Tuple, Any
-from dendritic.experiments.models.MiniGPT import MiniGPT, ConfidenceAwareGPT
+from dendritic.experiments.models.DoubtAwareGPT import DoubtAwareGPT
+from dendritic.experiments.models.MiniGPT import MiniGPT
 
 
-def compare_parameter_counts(standard_model: MiniGPT, confidence_model: ConfidenceAwareGPT) -> Dict[str, Any]:
+def compare_parameter_counts(standard_model: MiniGPT, doubt_model: DoubtAwareGPT) -> Dict[str, Any]:
     """
-    Compare parameter counts between standard and confidence models.
+    Compare parameter counts between standard and doubt models.
 
     Args:
         standard_model: Standard MiniGPT model
-        confidence_model: ConfidenceAwareGPT model
+        doubt_model: DoubtAwareGPT model
 
     Returns:
         Dictionary with parameter counts and comparison metrics
     """
     # Calculate total parameters
     std_params = sum(p.numel() for p in standard_model.parameters())
-    conf_params = sum(p.numel() for p in confidence_model.parameters())
+    doubt_params = sum(p.numel() for p in doubt_model.parameters())
 
     # Calculate layer-wise breakdown
     std_layer_params = {}
-    conf_layer_params = {}
+    doubt_layer_params = {}
 
     for name, param in standard_model.named_parameters():
         std_layer_params[name] = param.numel()
 
-    for name, param in confidence_model.named_parameters():
-        conf_layer_params[name] = param.numel()
+    for name, param in doubt_model.named_parameters():
+        doubt_layer_params[name] = param.numel()
 
     # Calculate difference
-    param_diff = conf_params - std_params
+    param_diff = doubt_params - std_params
     relative_diff = param_diff / std_params if std_params > 0 else float("inf")
 
     return {
         "standard_total": std_params,
-        "confidence_total": conf_params,
+        "doubt_total": doubt_params,
         "difference": param_diff,
         "relative_difference": relative_diff,
         "standard_by_layer": std_layer_params,
-        "confidence_by_layer": conf_layer_params,
+        "doubt_by_layer": doubt_layer_params,
         "is_fair_comparison": relative_diff < 0.3,  # Less than 30% more params
     }
 
 
 def validate_loss_predictions(
-    confidence_model: ConfidenceAwareGPT,
+    doubt_model: DoubtAwareGPT,
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
     threshold: float = 0.95,
@@ -61,7 +62,7 @@ def validate_loss_predictions(
     Validate that loss predictions are within reasonable bounds.
 
     Args:
-        confidence_model: ConfidenceAwareGPT model
+        doubt_model: DoubtAwareGPT model
         input_ids: Input token IDs
         attention_mask: Attention mask
         threshold: Minimum percentage of values that should be in [0, 1] range
@@ -69,13 +70,13 @@ def validate_loss_predictions(
     Returns:
         Dictionary with validation results
     """
-    confidence_model.eval()
+    doubt_model.eval()
 
     with torch.no_grad():
-        output = confidence_model(
+        output = doubt_model(
             input_ids=input_ids,
             labels=None,  # No labels for validation
-            confidence_scalars=None,  # Default confidence
+            doubt_scalars=None,  # Default doubt
         )
 
     loss_pred = output["loss_prediction"]
@@ -127,15 +128,15 @@ def validate_loss_predictions(
 
 
 def validate_experiment_results(
-    results: Any,  # ConfidenceExperimentResults type
-    config: Any,  # ConfidenceExperimentConfig type
+    results: Any,  # DoubtExperimentResults type
+    config: Any,  # DoubtExperimentConfig type
 ) -> Dict[str, Any]:
     """
     Validate experiment results for consistency and completeness.
 
     Args:
-        results: ConfidenceExperimentResults object
-        config: ConfidenceExperimentConfig object
+        results: DoubtExperimentResults object
+        config: DoubtExperimentConfig object
 
     Returns:
         Dictionary with validation results
@@ -150,7 +151,7 @@ def validate_experiment_results(
     # Check 1: Results structure
     required_attrs = [
         "standard_model_results",
-        "confidence_model_results",
+        "doubt_model_results",
         "config",
         "timestamp",
         "training_time",
@@ -164,14 +165,14 @@ def validate_experiment_results(
             validation_results["errors"].append(f"Missing attribute: {attr}")
 
     # Check 2: All seeds have results
-    if hasattr(results, "standard_model_results") and hasattr(results, "confidence_model_results"):
+    if hasattr(results, "standard_model_results") and hasattr(results, "doubt_model_results"):
         std_seeds = set(results.standard_model_results.keys())
-        conf_seeds = set(results.confidence_model_results.keys())
+        doubt_seeds = set(results.doubt_model_results.keys())
 
-        if std_seeds == conf_seeds:
+        if std_seeds == doubt_seeds:
             validation_results["checks_passed"].append("seed_consistency")
         else:
-            validation_results["errors"].append(f"Seed mismatch: standard={std_seeds}, confidence={conf_seeds}")
+            validation_results["errors"].append(f"Seed mismatch: standard={std_seeds}, doubt={doubt_seeds}")
 
         # Check if all config seeds are present
         config_seeds = set(str(seed) for seed in config.seeds)
@@ -185,7 +186,7 @@ def validate_experiment_results(
     # Check 3: Training times are positive
     if hasattr(results, "training_time"):
         training_time = results.training_time
-        for model_type in ["standard", "confidence"]:
+        for model_type in ["standard", "doubt"]:
             if model_type in training_time:
                 time_val = training_time[model_type]
                 if time_val > 0:
@@ -196,21 +197,21 @@ def validate_experiment_results(
     # Check 4: Parameter counts are reasonable
     if hasattr(results, "parameter_counts"):
         param_counts = results.parameter_counts
-        if "standard" in param_counts and "confidence" in param_counts:
+        if "standard" in param_counts and "doubt" in param_counts:
             std_params = param_counts["standard"]
-            conf_params = param_counts["confidence"]
+            doubt_params = param_counts["doubt"]
 
-            if conf_params > std_params:
-                validation_results["checks_passed"].append("confidence_has_more_params")
+            if doubt_params > std_params:
+                validation_results["checks_passed"].append("doubt_has_more_params")
 
                 # Check relative difference
-                rel_diff = (conf_params - std_params) / std_params
+                rel_diff = (doubt_params - std_params) / std_params
                 if rel_diff < 0.3:  # Less than 30% more parameters
                     validation_results["checks_passed"].append("reasonable_param_increase")
                 else:
                     validation_results["warnings"].append(f"Large parameter increase: {rel_diff:.1%}")
             else:
-                validation_results["errors"].append("Confidence model should have more parameters than standard model")
+                validation_results["errors"].append("Doubt model should have more parameters than standard model")
 
     # Determine overall validity
     is_valid = len(validation_results["errors"]) == 0

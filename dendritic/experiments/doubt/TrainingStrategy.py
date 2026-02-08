@@ -1,5 +1,5 @@
-from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
-from dendritic.experiments.confidence.results import ConfidenceTrainingResult
+from dendritic.experiments.doubt.config import DoubtExperimentConfig
+from dendritic.experiments.doubt.results import DoubtTrainingResult
 from dendritic.experiments.utils.TrainingResult import TrainingResult
 
 
@@ -10,19 +10,19 @@ import torch.nn as nn
 from abc import ABC, abstractmethod
 from typing import Any
 
-from dendritic.experiments.models.MiniGPT import ConfidenceAwareGPT
+from dendritic.experiments.models.DoubtAwareGPT import DoubtAwareGPT
 
 
 class TrainingStrategy(ABC):
     """Abstract base class for training strategies."""
 
-    def __init__(self, config: ConfidenceExperimentConfig):
+    def __init__(self, config: DoubtExperimentConfig):
         self.config = config
 
     @abstractmethod
     def training_step(
         self,
-        model: nn.Module | ConfidenceAwareGPT,
+        model: nn.Module | DoubtAwareGPT,
         batch: tuple[torch.Tensor, ...],
         device: str,
         **kwargs,
@@ -60,9 +60,7 @@ class TrainingStrategy(ABC):
         pass
 
     @abstractmethod
-    def prepare_batch(
-        self, batch: tuple[torch.Tensor, ...], device: str
-    ) -> tuple[torch.Tensor, ...]:
+    def prepare_batch(self, batch: tuple[torch.Tensor, ...], device: str) -> tuple[torch.Tensor, ...]:
         """
         Prepare batch for training/evaluation.
 
@@ -86,12 +84,12 @@ class TrainingStrategy(ABC):
         loss_history: list[dict[str, Any]],
         training_time: float,
         additional_metrics: dict[str, Any] | None = None,
-    ) -> TrainingResult | ConfidenceTrainingResult:
+    ) -> TrainingResult | DoubtTrainingResult:
         """
         Create appropriate result object for this strategy.
 
         Args:
-            model_type: Type of model (e.g., "standard", "confidence")
+            model_type: Type of model (e.g., "standard", "doubt")
             seed: Random seed used
             final_train_loss: Final training loss
             final_eval_loss: Final evaluation loss

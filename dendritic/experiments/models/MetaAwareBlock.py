@@ -19,18 +19,18 @@ class AdaptiveMetaAwareBlock(nn.Module):
         self.mlp = mlp_module
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, confidence_scalar, attn_mask: torch.Tensor | None = None):
-        # confidence_scalar shape: [batch_size, seq_len, 1]
+    def forward(self, x, doubt_scalar, attn_mask: torch.Tensor | None = None):
+        # doubt_scalar shape: [batch_size, seq_len, 1]
 
         # 1. Attention Sub-layer
-        # The confidence modulates the norm BEFORE attention
-        norm_x = self.ln1(x, confidence_scalar)
+        # The doubt modulates the norm BEFORE attention
+        norm_x = self.ln1(x, doubt_scalar)
         attn_out, _ = self.attn(norm_x, norm_x, norm_x, attn_mask=attn_mask)
         x = x + self.dropout(attn_out)
 
         # 2. MLP Sub-layer
-        # The confidence modulates the norm BEFORE the MLP
-        norm_x = self.ln2(x, confidence_scalar)
+        # The doubt modulates the norm BEFORE the MLP
+        norm_x = self.ln2(x, doubt_scalar)
         x = x + self.dropout(self.mlp(norm_x))
 
         return x
@@ -45,14 +45,14 @@ class AdaptiveLayer(nn.Module):
         # Reduces params slightly and avoids fighting between two shifts.
         self.norm = nn.LayerNorm(dim, elementwise_affine=False)
 
-        self.conf_project = nn.Linear(1, 2 * dim)
+        self.doubt_project = nn.Linear(1, 2 * dim)
 
         # CRITICAL: Zero initialization
         # This ensures the model starts as a standard Transformer
-        nn.init.zeros_(self.conf_project.weight)
-        nn.init.zeros_(self.conf_project.bias)
+        nn.init.zeros_(self.doubt_project.weight)
+        nn.init.zeros_(self.doubt_project.bias)
 
-    def forward(self, x, confidence_scalar):
+    def forward(self, x, doubt_scalar):
         normalized_x = self.norm(x)
-        scale, shift = self.conf_project(confidence_scalar).chunk(2, dim=-1)
+        scale, shift = self.doubt_project(doubt_scalar).chunk(2, dim=-1)
         return normalized_x * (1 + scale) + shift

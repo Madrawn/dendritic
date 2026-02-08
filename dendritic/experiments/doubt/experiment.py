@@ -1,6 +1,6 @@
 # ruff: noqa: PLR6301
 """
-Confidence-aware GPT experiment implementation.
+Doubt-aware GPT experiment implementation.
 
 This module implements the DoubtAwareExperiment class for comparing
 DoubtAwareGPT (with two-pass lookahead training) vs standard MiniGPT.
@@ -22,20 +22,20 @@ from dendritic.experiments.utils.loss_utils import (
     compute_sequence_language_modeling_loss,
 )
 
-from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
-from dendritic.experiments.confidence.data_loader import prepare_confidence_data
-from dendritic.experiments.confidence.results import (
-    ConfidenceTrainingResult,
-    ConfidenceExperimentResults,
+from dendritic.experiments.doubt.config import DoubtExperimentConfig
+from dendritic.experiments.doubt.data_loader import prepare_doubt_data
+from dendritic.experiments.doubt.results import (
+    DoubtTrainingResult,
+    DoubtExperimentResults,
     save_results,
 )
-from dendritic.experiments.confidence.UnifiedTrainer import (
+from dendritic.experiments.doubt.UnifiedTrainer import (
     UnifiedTrainer,
 )
-from dendritic.experiments.confidence.DoubtTrainingStrategy import (
-    ConfidenceTrainingStrategy,
+from dendritic.experiments.doubt.DoubtTrainingStrategy import (
+    DoubtTrainingStrategy,
 )
-from dendritic.experiments.confidence.StandardTrainingStrategy import (
+from dendritic.experiments.doubt.StandardTrainingStrategy import (
     StandardTrainingStrategy,
 )
 
@@ -49,12 +49,12 @@ class DoubtAwareExperiment:
     results tracking.
     """
 
-    def __init__(self, config: ConfidenceExperimentConfig):
+    def __init__(self, config: DoubtExperimentConfig):
         """
         Initialize the experiment with configuration.
 
         Args:
-            config: ConfidenceExperimentConfig containing experiment parameters
+            config: DoubtExperimentConfig containing experiment parameters
         """
         self.config = config
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -78,7 +78,7 @@ class DoubtAwareExperiment:
         Create both model variants with parameter matching.
 
         Returns:
-            Tuple of (standard_model, confidence_model)
+            Tuple of (standard_model, doubt_model)
         """
         # Get matching hidden dimensions
         baseline_hidden, dendritic_hidden = find_matching_hidden_dims(self.config)
@@ -99,8 +99,8 @@ class DoubtAwareExperiment:
         standard_model = MiniGPT(standard_config)
 
         # Create DoubtAwareGPT with ModelConfig
-        # Confidence model uses same sequence length as standard model
-        confidence_config = ModelConfig(
+        # Doubt model uses same sequence length as standard model
+        doubt_config = ModelConfig(
             vocab_size=self.config.vocab_size,
             embed_dim=self.config.embed_dim,
             num_heads=self.config.num_heads,
@@ -112,21 +112,21 @@ class DoubtAwareExperiment:
             poly_rank=16,
             poly_degree=3,
         )
-        confidence_model = DoubtAwareGPT(confidence_config)
+        doubt_model = DoubtAwareGPT(doubt_config)
 
         # Log parameter counts
         std_params = sum(p.numel() for p in standard_model.parameters())
-        conf_params = sum(p.numel() for p in confidence_model.parameters())
+        doubt_params = sum(p.numel() for p in doubt_model.parameters())
 
         logging.info(f"Standard model parameters: {std_params:,}")
-        logging.info(f"Confidence model parameters: {conf_params:,}")
+        logging.info(f"Doubt model parameters: {doubt_params:,}")
         logging.info(
-            f"Parameter difference: {conf_params - std_params:,} ({(conf_params - std_params) / std_params * 100:.2f}%)"
+            f"Parameter difference: {doubt_params - std_params:,} ({(doubt_params - std_params) / std_params * 100:.2f}%)"
         )
 
-        return standard_model, confidence_model
+        return standard_model, doubt_model
 
-    def train_confidence_model(
+    def train_doubt_model(
         self,
         model: DoubtAwareGPT,
         train_loader,
@@ -134,7 +134,7 @@ class DoubtAwareExperiment:
         device: str,
         seed: int,
         tokenizer=None,  # Optional tokenizer for sampling
-    ) -> ConfidenceTrainingResult:
+    ) -> DoubtTrainingResult:
         """
         Two-pass training loop using unified trainer.
 
@@ -147,18 +147,18 @@ class DoubtAwareExperiment:
             tokenizer: Optional tokenizer for sampling during evaluation
 
         Returns:
-            ConfidenceTrainingResult with training metrics
+            DoubtTrainingResult with training metrics
         """
-        strategy = ConfidenceTrainingStrategy(self.config)
+        strategy = DoubtTrainingStrategy(self.config)
         trainer = UnifiedTrainer(
             self.config,
             strategy,
-            "confidence",
+            "doubt",
             tokenizer=tokenizer,
             results_dir=self.results_dir,
         )
         result = trainer.train(model, train_loader, eval_loader, seed)
-        # Type cast since ConfidenceTrainingStrategy returns ConfidenceTrainingResult
+        # Type cast since DoubtTrainingStrategy returns DoubtTrainingResult
         return result  # type: ignore
 
     def train_standard_model(
@@ -196,8 +196,8 @@ class DoubtAwareExperiment:
         # Type cast since StandardTrainingStrategy returns TrainingResult
         return result  # type: ignore
 
-    def _evaluate_confidence_model(self, model: DoubtAwareGPT, eval_loader, device: str, num_batches: int) -> float:
-        """Evaluate confidence model on validation set."""
+    def _evaluate_doubt_model(self, model: DoubtAwareGPT, eval_loader, device: str, num_batches: int) -> float:
+        """Evaluate doubt model on validation set."""
         model.eval()
         total_loss = 0.0
         total_batches = 0
@@ -210,10 +210,10 @@ class DoubtAwareExperiment:
                 tokens_t = tokens_t.to(device)
                 tokens_t_plus_1 = tokens_t_plus_1.to(device)
 
-                # Initialize confidence
+                # Initialize doubt
                 batch_size = tokens_t.shape[0]
                 seq_len = tokens_t.shape[1]
-                prev_conf = torch.zeros(
+                prev_doubt = torch.zeros(
                     (batch_size, seq_len, 1),
                     device=device,
                     dtype=model.tok_emb.weight.dtype,
@@ -224,7 +224,7 @@ class DoubtAwareExperiment:
                     model=model,
                     tokens_t=tokens_t,
                     tokens_t_plus_1=tokens_t_plus_1,
-                    alpha=self.config.confidence_alpha,
+                    alpha=self.config.doubt_alpha,
                 )
 
                 total_loss += result["loss_lm"].item()
@@ -266,7 +266,7 @@ class DoubtAwareExperiment:
         model.train()
         return total_loss / total_batches if total_batches > 0 else float("inf")
 
-    def run(self, tokenizer) -> ConfidenceExperimentResults:
+    def run(self, tokenizer) -> DoubtExperimentResults:
         """
         Run full experiment comparing both models.
 
@@ -274,14 +274,14 @@ class DoubtAwareExperiment:
             tokenizer: Tokenizer for the dataset
 
         Returns:
-            ConfidenceExperimentResults with results from both models
+            DoubtExperimentResults with results from both models
         """
-        logging.info("Starting confidence-aware experiment")
+        logging.info("Starting doubt-aware experiment")
         logging.info(f"Configuration: {self.config}")
 
         # Prepare data
         logging.info("Preparing data...")
-        dataloaders = prepare_confidence_data(
+        dataloaders = prepare_doubt_data(
             config=self.config,
             tokenizer=tokenizer,
             dataset_kwargs=self.config.dataset_kwargs,
@@ -292,34 +292,34 @@ class DoubtAwareExperiment:
 
         # Create models
         logging.info("Creating models...")
-        standard_model, confidence_model = self.create_models()
+        standard_model, doubt_model = self.create_models()
 
         # Get parameter counts
         std_params = sum(p.numel() for p in standard_model.parameters())
-        conf_params = sum(p.numel() for p in confidence_model.parameters())
+        doubt_params = sum(p.numel() for p in doubt_model.parameters())
 
-        parameter_counts = {"standard": std_params, "confidence": conf_params}
+        parameter_counts = {"standard": std_params, "doubt": doubt_params}
 
         # Run experiments for each seed
         standard_results = {}
-        confidence_results = {}
-        training_times = {"standard": [], "confidence": []}
+        doubt_results = {}
+        training_times = {"standard": [], "doubt": []}
 
         for seed in self.config.seeds:
             logging.info(f"Running experiment with seed={seed}")
 
-            # Train confidence model
-            logging.info(f"Training confidence model (seed={seed})...")
-            confidence_result = self.train_confidence_model(
-                confidence_model,
+            # Train doubt model
+            logging.info(f"Training doubt model (seed={seed})...")
+            doubt_result = self.train_doubt_model(
+                doubt_model,
                 train_loader,
                 eval_loader,
                 self.device,
                 seed,
                 tokenizer,
             )
-            confidence_results[str(seed)] = [confidence_result]
-            training_times["confidence"].append(confidence_result.training_time)
+            doubt_results[str(seed)] = [doubt_result]
+            training_times["doubt"].append(doubt_result.training_time)
             # Train standard model
             logging.info(f"Training standard model (seed={seed})...")
             standard_result = self.train_standard_model(
@@ -330,18 +330,18 @@ class DoubtAwareExperiment:
 
             # Save intermediate results
             if self.config.save_interval > 0 and (seed % self.config.save_interval == 0):
-                self._save_intermediate_results(standard_results, confidence_results, parameter_counts, seed)
+                self._save_intermediate_results(standard_results, doubt_results, parameter_counts, seed)
 
         # Calculate average training times
         avg_training_time = {
             "standard": (float(np.mean(training_times["standard"])) if training_times["standard"] else 0.0),
-            "confidence": (float(np.mean(training_times["confidence"])) if training_times["confidence"] else 0.0),
+            "doubt": (float(np.mean(training_times["doubt"])) if training_times["doubt"] else 0.0),
         }
 
         # Create final results object
-        results = ConfidenceExperimentResults(
+        results = DoubtExperimentResults(
             standard_model_results=standard_results,
-            confidence_model_results=confidence_results,
+            doubt_model_results=doubt_results,
             config=self.config,
             timestamp=datetime.now().isoformat(),
             training_time=avg_training_time,
@@ -357,28 +357,28 @@ class DoubtAwareExperiment:
     def _save_intermediate_results(
         self,
         standard_results: Dict[str, List[TrainingResult]],
-        confidence_results: Dict[str, List[ConfidenceTrainingResult]],
+        doubt_results: Dict[str, List[DoubtTrainingResult]],
         parameter_counts: Dict[str, int],
         seed: int,
     ):
         """Save intermediate results to disk."""
         # Calculate training times from results
-        training_time = {"standard": 0.0, "confidence": 0.0}
+        training_time = {"standard": 0.0, "doubt": 0.0}
         if standard_results:
             # Get average training time for standard models
             std_times = [r.training_time for seed_list in standard_results.values() for r in seed_list]
             if std_times:
                 training_time["standard"] = float(np.mean(std_times))
 
-        if confidence_results:
-            # Get average training time for confidence models
-            conf_times = [r.training_time for seed_list in confidence_results.values() for r in seed_list]
-            if conf_times:
-                training_time["confidence"] = float(np.mean(conf_times))
+        if doubt_results:
+            # Get average training time for doubt models
+            doubt_times = [r.training_time for seed_list in doubt_results.values() for r in seed_list]
+            if doubt_times:
+                training_time["doubt"] = float(np.mean(doubt_times))
 
-        intermediate_results = ConfidenceExperimentResults(
+        intermediate_results = DoubtExperimentResults(
             standard_model_results=standard_results,
-            confidence_model_results=confidence_results,
+            doubt_model_results=doubt_results,
             config=self.config,
             timestamp=datetime.now().isoformat(),
             training_time=training_time,
@@ -390,7 +390,7 @@ class DoubtAwareExperiment:
         save_path = save_results(intermediate_results, self.results_dir, filename)
         logging.info(f"Saved intermediate results to {save_path}")
 
-    def _save_results(self, results: ConfidenceExperimentResults):
+    def _save_results(self, results: DoubtExperimentResults):
         """Save final results to disk."""
         # Use the new serialization function
         save_results(results, self.results_dir, "final_results.json")

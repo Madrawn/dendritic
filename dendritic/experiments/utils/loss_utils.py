@@ -1,5 +1,5 @@
 """
-Loss computation utilities for language modeling and confidence prediction.
+Loss computation utilities for language modeling and doubt prediction.
 
 This module provides standardized loss functions to separate loss computation
 from model forward passes, following PyTorch conventions.
@@ -37,7 +37,7 @@ def compute_language_modeling_loss(
     )
 
 
-def compute_confidence_loss(
+def compute_doubt_loss(
     loss_prediction: torch.Tensor,
     future_losses: torch.Tensor,
     reduction: str = "mean",
@@ -119,7 +119,7 @@ def compute_sequence_language_modeling_loss(
         raise ValueError(f"Invalid reduction: {reduction}")
 
 
-def compute_total_confidence_aware_loss(
+def compute_total_doubt_aware_loss(
     logits: torch.Tensor,
     loss_prediction: torch.Tensor,
     labels: torch.Tensor,
@@ -146,7 +146,7 @@ def compute_total_confidence_aware_loss(
 
     # Loss prediction loss (only up to seq_len-1 where we have future losses)
     # Note: loss_prediction and future_losses should already be aligned
-    loss_prediction_loss = compute_confidence_loss(
+    loss_prediction_loss = compute_doubt_loss(
         loss_prediction[:, :-1],  # Exclude last position
         future_losses[:, :-1],  # Exclude last position
     )

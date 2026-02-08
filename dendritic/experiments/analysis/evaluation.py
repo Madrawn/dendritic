@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 
 from torch.utils.data import DataLoader
 
@@ -7,9 +6,7 @@ from dendritic.experiments.models.MiniGPT import MiniGPT
 from dendritic.experiments.utils.loss_utils import compute_language_modeling_loss
 
 
-def evaluate(
-    model: MiniGPT, dataloader: DataLoader, max_batches: int | None, device: str
-) -> float:
+def evaluate(model: MiniGPT, dataloader: DataLoader, max_batches: int | None, device: str) -> float:
     """Evaluate model and return mean loss."""
     model.eval()
     total_loss = 0.0

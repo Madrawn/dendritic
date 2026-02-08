@@ -1,17 +1,17 @@
 """
-Unified training infrastructure for confidence-aware experiments.
+Unified training infrastructure for doubt-aware experiments.
 
 This module provides a unified training framework that combines shared logic
-from confidence and standard model training, while keeping model-specific
+from doubt and standard model training, while keeping model-specific
 differences in separate strategy classes.
 """
 
 from typing import cast
 from dendritic.experiments.utils.TrainingResult import TrainingResult
 from dendritic.experiments.utils.experiment_utils import set_random_seed
-from dendritic.experiments.confidence.TrainingStrategy import TrainingStrategy
-from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
-from dendritic.experiments.confidence.results import ConfidenceTrainingResult
+from dendritic.experiments.doubt.TrainingStrategy import TrainingStrategy
+from dendritic.experiments.doubt.config import DoubtExperimentConfig
+from dendritic.experiments.doubt.results import DoubtTrainingResult
 
 
 import numpy as np
@@ -36,7 +36,7 @@ class UnifiedTrainer:
 
     def __init__(
         self,
-        config: ConfidenceExperimentConfig,
+        config: DoubtExperimentConfig,
         strategy: TrainingStrategy,
         model_type: str,
         tokenizer=None,  # Optional tokenizer for sampling
@@ -180,24 +180,24 @@ class UnifiedTrainer:
             return
 
         try:
-            from dendritic.experiments.confidence.sampling_utils import (
+            from dendritic.experiments.doubt.sampling_utils import (
                 sample_model_output,
                 SamplingConfig,
             )
 
-            # Determine if we should use confidence-aware sampling
-            # Only for ConfidenceAwareGPT models
-            use_confidence = hasattr(model, "loss_predictor")
+            # Determine if we should use doubt-aware sampling
+            # Only for DoubtAwareGPT models
+            use_doubt = hasattr(model, "loss_predictor")
 
             sampling_config = SamplingConfig(
                 device=self.device,
                 max_new_tokens=self.config.sampling_max_tokens,
                 temperature=self.config.sampling_temperature,
                 top_p=self.config.sampling_top_p,
-                use_confidence=use_confidence,
-                include_confidence_formatting=True,
+                use_doubt=use_doubt,
+                include_doubt_formatting=True,
             )
-            generated, loss_predictions, formatted_tokens_with_confidence = sample_model_output(
+            generated, loss_predictions, formatted_tokens_with_doubt = sample_model_output(
                 model=model,
                 tokenizer=self.tokenizer,
                 prompt=self.config.sampling_prompt,
@@ -223,7 +223,7 @@ class UnifiedTrainer:
                 eval_loss=eval_loss,
                 sampled_text=generated,
                 loss_predictions=loss_predictions,
-                formatted_tokens_with_confidence=formatted_tokens_with_confidence,
+                formatted_tokens_with_doubt=formatted_tokens_with_doubt,
             )
 
         except Exception as e:
@@ -237,7 +237,7 @@ class UnifiedTrainer:
         eval_loss,
         sampled_text,
         loss_predictions=None,
-        formatted_tokens_with_confidence=None,
+        formatted_tokens_with_doubt=None,
     ):
         """
         Save sampled tokens to text file alongside JSON results.
@@ -273,15 +273,15 @@ class UnifiedTrainer:
                 f.write(f"Loss Predictions: {loss_predictions}\n")
                 f.write(f"Avg Loss Prediction: {sum(loss_predictions) / len(loss_predictions):.4f}\n")
 
-                # Add formatted tokens with confidence if available
-                if formatted_tokens_with_confidence is not None:
-                    f.write(f"Sampled Tokens with Confidence: {formatted_tokens_with_confidence}\n")
+                # Add formatted tokens with doubt if available
+                if formatted_tokens_with_doubt is not None:
+                    f.write(f"Sampled Tokens with Doubt: {formatted_tokens_with_doubt}\n")
 
             f.write("=" * 40 + "\n\n")
 
     def train(
         self, model: nn.Module, train_loader: Iterable, eval_loader: Iterable, seed: int
-    ) -> TrainingResult | ConfidenceTrainingResult:
+    ) -> TrainingResult | DoubtTrainingResult:
         """
         Unified training loop.
 
@@ -358,7 +358,7 @@ class UnifiedTrainer:
         best_eval_loss = float("inf")
         loss_history = []
         strategy_metrics = {
-            "confidence_loss_history": [],
+            "doubt_loss_history": [],
             "token_loss_history": [],
             "loss_predictions": [],
             "actual_future_losses": [],
@@ -382,9 +382,9 @@ class UnifiedTrainer:
         # Initialize loss tracking (ported from pretraining)
         queued_loss = None
         avg_train_loss_tensor = torch.tensor(15.0, device="cpu")
-        # Separate tracking for lm_loss and confidence_loss
+        # Separate tracking for lm_loss and doubt_loss
         avg_train_lm_loss_tensor = torch.tensor(15.0, device="cpu")
-        avg_train_conf_loss_tensor = torch.tensor(0.0, device="cpu")
+        avg_train_doubt_loss_tensor = torch.tensor(0.0, device="cpu")
         avg_eval_loss = 15.0
         no_improvement_count = 0
         loss = None
@@ -426,8 +426,8 @@ class UnifiedTrainer:
                     pass
 
             # Track strategy-specific metrics
-            if "loss_confidence" in step_result:
-                strategy_metrics["confidence_loss_history"].append(step_result["loss_confidence"].item())
+            if "loss_doubt" in step_result:
+                strategy_metrics["doubt_loss_history"].append(step_result["loss_doubt"].item())
             if "loss_lm" in step_result:
                 strategy_metrics["token_loss_history"].append(step_result["loss_lm"].item())
             if "pred_loss_t" in step_result:
@@ -439,9 +439,9 @@ class UnifiedTrainer:
             # Accumulate separate losses if available
             if "loss_lm" in step_result:
                 avg_train_lm_loss_tensor = avg_train_lm_loss_tensor * 0.9 + 0.1 * step_result["loss_lm"].detach().cpu()
-            if "loss_confidence" in step_result:
-                avg_train_conf_loss_tensor = (
-                    avg_train_conf_loss_tensor * 0.9 + 0.1 * step_result["loss_confidence"].detach().cpu()
+            if "loss_doubt" in step_result:
+                avg_train_doubt_loss_tensor = (
+                    avg_train_doubt_loss_tensor * 0.9 + 0.1 * step_result["loss_doubt"].detach().cpu()
                 )
 
             # Update Progress Bar (Periodic Sync) - ported from pretraining
@@ -510,19 +510,19 @@ class UnifiedTrainer:
                 # Add strategy-specific metrics if available
                 if "loss_lm" in step_result:
                     history_entry["train_loss_lm"] = step_result["loss_lm"].item()
-                if "loss_confidence" in step_result:
-                    history_entry["train_loss_conf"] = step_result["loss_confidence"].item()
+                if "loss_doubt" in step_result:
+                    history_entry["train_loss_doubt"] = step_result["loss_doubt"].item()
 
                 loss_history.append(history_entry)
 
                 # Format logging based on model type
-                if "loss_confidence" in step_result:
-                    # Confidence model: show separate losses
+                if "loss_doubt" in step_result:
+                    # Doubt model: show separate losses
                     avg_train_lm_loss = avg_train_lm_loss_tensor.item()
-                    avg_train_conf_loss = avg_train_conf_loss_tensor.item()
+                    avg_train_doubt_loss = avg_train_doubt_loss_tensor.item()
                     logging.info(
                         f"{self.model_type} seed={seed} step={step + 1}: "
-                        f"train_lm={avg_train_lm_loss:.4f}, train_conf={avg_train_conf_loss:.4f}, "
+                        f"train_lm={avg_train_lm_loss:.4f}, train_doubt={avg_train_doubt_loss:.4f}, "
                         f"avg_eval_loss={avg_eval_loss:.4f}, ppl={perplexity:.2f}"
                     )
                 else:

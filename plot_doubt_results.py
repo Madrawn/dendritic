@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Script to automatically plot the latest confidence experiment results.
+Script to automatically plot the latest doubt experiment results.
 
 This script:
-1. Finds the most recent confidence experiment results file
+1. Finds the most recent doubt experiment results file
 2. Generates comprehensive visualizations
 3. Saves plots to the current directory
 4. Prints summary statistics
 
 Usage:
-    python plot_confidence_results.py [results_file]
+    python plot_doubt_results.py [results_file]
 
 If no results_file is provided, it automatically finds the latest one.
 """
@@ -23,7 +23,7 @@ import argparse
 # Add project to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from dendritic.experiments.confidence.visualization import (
+from dendritic.experiments.doubt.visualization import (
     plot_loss_curves,
     plot_calibration_curve,
     plot_training_time_comparison,
@@ -31,9 +31,9 @@ from dendritic.experiments.confidence.visualization import (
 )
 
 
-def find_latest_results_file(results_dir="results/confidence_experiments"):
+def find_latest_results_file(results_dir="results/doubt_experiments"):
     """
-    Find the most recent confidence experiment results file.
+    Find the most recent doubt experiment results file.
 
     Args:
         results_dir: Directory containing results files
@@ -82,7 +82,7 @@ def find_latest_results_file(results_dir="results/confidence_experiments"):
     return latest_file
 
 
-def plot_results(results_file, output_prefix="confidence"):
+def plot_results(results_file, output_prefix="doubt"):
     """
     Plot all visualizations for a given results file.
 
@@ -189,12 +189,12 @@ def plot_results(results_file, output_prefix="confidence"):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot confidence experiment results",
+        description="Plot doubt experiment results",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s                         # Plot latest results automatically
-  %(prog)s results/confidence_experiments/20260128_093429_results.json
+  %(prog)s results/doubt_experiments/20260128_093429_results.json
   %(prog)s --prefix my_experiment  # Custom output prefix
         """,
     )
@@ -205,13 +205,13 @@ Examples:
     )
     parser.add_argument(
         "--prefix",
-        default="confidence",
-        help="Prefix for output files (default: 'confidence')",
+        default="doubt",
+        help="Prefix for output files (default: 'doubt')",
     )
     parser.add_argument(
         "--dir",
-        default="results/confidence_experiments",
-        help="Results directory to search (default: 'results/confidence_experiments')",
+        default="results/doubt_experiments",
+        help="Results directory to search (default: 'results/doubt_experiments')",
     )
 
     args = parser.parse_args()
@@ -233,7 +233,7 @@ Examples:
     success = plot_results(results_file, args.prefix)
 
     if success:
-        print("\n✅ Successfully plotted confidence experiment results!")
+        print("\n✅ Successfully plotted doubt experiment results!")
         sys.exit(0)
     else:
         print("\n❌ Failed to plot results.")

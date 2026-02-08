@@ -1,27 +1,28 @@
 # ruff: noqa: PLR6301, PLR2004
 """
-Tests for the ConfidenceAwareExperiment class.
+Tests for the DoubtAwareExperiment class.
 """
 
 import pytest
 import torch
 from unittest.mock import Mock, patch
-from dendritic.experiments.confidence import (
-    ConfidenceExperimentConfig,
-    ConfidenceAwareExperiment,
-    ConfidenceTrainingResult,
-    ConfidenceExperimentResults,
+from dendritic.experiments.doubt import (
+    DoubtExperimentConfig,
+    DoubtAwareExperiment,
+    DoubtTrainingResult,
+    DoubtExperimentResults,
 )
-from dendritic.experiments.models.MiniGPT import MiniGPT, ConfidenceAwareGPT
+from dendritic.experiments.models.DoubtAwareGPT import DoubtAwareGPT
+from dendritic.experiments.models.MiniGPT import MiniGPT
 
 
-class TestConfidenceAwareExperiment:
-    """Test suite for ConfidenceAwareExperiment."""
+class TestDoubtAwareExperiment:
+    """Test suite for DoubtAwareExperiment."""
 
     @pytest.mark.unit
     def test_config_initialization(self):
-        """Test that ConfidenceExperimentConfig can be initialized."""
-        config = ConfidenceExperimentConfig(
+        """Test that DoubtExperimentConfig can be initialized."""
+        config = DoubtExperimentConfig(
             vocab_size=1000,
             embed_dim=64,
             num_heads=4,
@@ -34,14 +35,14 @@ class TestConfidenceAwareExperiment:
 
         assert config.vocab_size == 1000
         assert config.embed_dim == 64
-        assert config.confidence_alpha == 1.0  # Default value
+        assert config.doubt_alpha == 1.0  # Default value
         assert config.lookahead_steps == 2  # Default value
-        assert config.results_dir == "results/confidence_experiments"
+        assert config.results_dir == "results/doubt_experiments"
 
     @pytest.mark.unit
     def test_experiment_initialization(self):
-        """Test that ConfidenceAwareExperiment can be initialized."""
-        config = ConfidenceExperimentConfig(
+        """Test that DoubtAwareExperiment can be initialized."""
+        config = DoubtExperimentConfig(
             vocab_size=1000,
             embed_dim=64,
             num_heads=4,
@@ -52,7 +53,7 @@ class TestConfidenceAwareExperiment:
             seeds=[42],
         )
 
-        experiment = ConfidenceAwareExperiment(config)
+        experiment = DoubtAwareExperiment(config)
 
         assert experiment.config == config
         assert experiment.device in ["cuda", "cpu"]
@@ -61,7 +62,7 @@ class TestConfidenceAwareExperiment:
     @pytest.mark.unit
     def test_create_models(self):
         """Test that create_models returns both model variants."""
-        config = ConfidenceExperimentConfig(
+        config = DoubtExperimentConfig(
             vocab_size=1000,
             embed_dim=64,
             num_heads=4,
@@ -72,28 +73,28 @@ class TestConfidenceAwareExperiment:
             seeds=[42],
         )
 
-        experiment = ConfidenceAwareExperiment(config)
-        standard_model, confidence_model = experiment.create_models()
+        experiment = DoubtAwareExperiment(config)
+        standard_model, doubt_model = experiment.create_models()
 
         assert isinstance(standard_model, MiniGPT)
-        assert isinstance(confidence_model, ConfidenceAwareGPT)
+        assert isinstance(doubt_model, DoubtAwareGPT)
 
         # Check that models have different architectures
-        assert hasattr(confidence_model, "loss_predictor")
+        assert hasattr(doubt_model, "loss_predictor")
         assert not hasattr(standard_model, "loss_predictor")
 
         # Log parameter counts (should be printed)
         std_params = sum(p.numel() for p in standard_model.parameters())
-        conf_params = sum(p.numel() for p in confidence_model.parameters())
+        doubt_params = sum(p.numel() for p in doubt_model.parameters())
 
-        # Confidence model should have more parameters due to confidence predictor
-        assert conf_params > std_params
+        # Doubt model should have more parameters due to doubt predictor
+        assert doubt_params > std_params
 
     @pytest.mark.unit
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_device_placement(self):
         """Test that models can be moved to CUDA if available."""
-        config = ConfidenceExperimentConfig(
+        config = DoubtExperimentConfig(
             vocab_size=1000,
             embed_dim=64,
             num_heads=4,
@@ -104,23 +105,23 @@ class TestConfidenceAwareExperiment:
             seeds=[42],
         )
 
-        experiment = ConfidenceAwareExperiment(config)
-        standard_model, confidence_model = experiment.create_models()
+        experiment = DoubtAwareExperiment(config)
+        standard_model, doubt_model = experiment.create_models()
 
         # Move to CUDA
         standard_model = standard_model.to("cuda")
-        confidence_model = confidence_model.to("cuda")
+        doubt_model = doubt_model.to("cuda")
 
         # Check device placement
         assert next(standard_model.parameters()).is_cuda
-        assert next(confidence_model.parameters()).is_cuda
+        assert next(doubt_model.parameters()).is_cuda
 
     @pytest.mark.unit
     def test_dataclasses(self):
         """Test that dataclasses can be instantiated."""
-        # Test ConfidenceTrainingResult
-        confidence_result = ConfidenceTrainingResult(
-            model_type="confidence",
+        # Test DoubtTrainingResult
+        doubt_result = DoubtTrainingResult(
+            model_type="doubt",
             seed=42,
             final_train_loss=2.5,
             final_eval_loss=2.8,
@@ -130,17 +131,17 @@ class TestConfidenceAwareExperiment:
             loss_history=[],
             training_time=100.0,
             config={},
-            confidence_loss_history=[0.5, 0.4, 0.3],
+            doubt_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.5, 2.4, 2.3],
             loss_predictions=[0.1, 0.2, 0.3],
             actual_future_losses=[2.6, 2.5, 2.4],
         )
 
-        assert confidence_result.model_type == "confidence"
-        assert confidence_result.seed == 42
-        assert len(confidence_result.confidence_loss_history) == 3
+        assert doubt_result.model_type == "doubt"
+        assert doubt_result.seed == 42
+        assert len(doubt_result.doubt_loss_history) == 3
 
-        # Test ConfidenceExperimentResults
+        # Test DoubtExperimentResults
         from dendritic.experiments.utils.TrainingResult import TrainingResult
 
         standard_result = TrainingResult(
@@ -156,25 +157,25 @@ class TestConfidenceAwareExperiment:
             config={},
         )
 
-        results = ConfidenceExperimentResults(
+        results = DoubtExperimentResults(
             standard_model_results={"42": [standard_result]},
-            confidence_model_results={"42": [confidence_result]},
-            config=ConfidenceExperimentConfig(),
+            doubt_model_results={"42": [doubt_result]},
+            config=DoubtExperimentConfig(),
             timestamp="2024-01-01T00:00:00",
-            training_time={"standard": 95.0, "confidence": 110.0},
-            parameter_counts={"standard": 1000, "confidence": 1200},
+            training_time={"standard": 95.0, "doubt": 110.0},
+            parameter_counts={"standard": 1000, "doubt": 1200},
         )
 
         assert len(results.standard_model_results) == 1
-        assert len(results.confidence_model_results) == 1
-        assert results.parameter_counts["confidence"] > results.parameter_counts["standard"]
+        assert len(results.doubt_model_results) == 1
+        assert results.parameter_counts["doubt"] > results.parameter_counts["standard"]
 
     @pytest.mark.unit
-    @patch("dendritic.experiments.confidence.experiment.prepare_confidence_data")
-    @patch("dendritic.experiments.confidence.experiment.ConfidenceAwareExperiment.train_standard_model")
-    @patch("dendritic.experiments.confidence.experiment.ConfidenceAwareExperiment.train_confidence_model")
-    @patch("dendritic.experiments.confidence.experiment.save_results")
-    def test_run_method_mocked(self, mock_save_results, mock_train_conf, mock_train_std, mock_prepare_data):
+    @patch("dendritic.experiments.doubt.experiment.prepare_doubt_data")
+    @patch("dendritic.experiments.doubt.experiment.DoubtAwareExperiment.train_standard_model")
+    @patch("dendritic.experiments.doubt.experiment.DoubtAwareExperiment.train_doubt_model")
+    @patch("dendritic.experiments.doubt.experiment.save_results")
+    def test_run_method_mocked(self, mock_save_results, mock_train_doubt, mock_train_std, mock_prepare_data):
         """Test the run method with mocked dependencies."""
         # Setup mocks
         mock_tokenizer = Mock()
@@ -198,8 +199,8 @@ class TestConfidenceAwareExperiment:
         )
         mock_train_std.return_value = mock_std_result
 
-        mock_conf_result = ConfidenceTrainingResult(
-            model_type="confidence",
+        mock_doubt_result = DoubtTrainingResult(
+            model_type="doubt",
             seed=42,
             final_train_loss=2.1,
             final_eval_loss=2.6,
@@ -209,15 +210,15 @@ class TestConfidenceAwareExperiment:
             loss_history=[],
             training_time=130.5,
             config={"test": "config"},
-            confidence_loss_history=[0.5, 0.4, 0.3],
+            doubt_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.0, 1.8, 1.6],
             loss_predictions=[0.8, 0.7, 0.6],
             actual_future_losses=[1.2, 1.1, 1.0],
         )
-        mock_train_conf.return_value = mock_conf_result
+        mock_train_doubt.return_value = mock_doubt_result
 
         # Create config and experiment
-        config = ConfidenceExperimentConfig(
+        config = DoubtExperimentConfig(
             vocab_size=1000,
             embed_dim=64,
             num_heads=4,
@@ -228,16 +229,16 @@ class TestConfidenceAwareExperiment:
             seeds=[42],
         )
 
-        experiment = ConfidenceAwareExperiment(config)
+        experiment = DoubtAwareExperiment(config)
 
         # Mock create_models to avoid actual model creation
         with patch.object(experiment, "create_models") as mock_create:
             mock_std_model = Mock()
-            mock_conf_model = Mock()
+            mock_doubt_model = Mock()
             # Mock parameters() to return an empty list
             mock_std_model.parameters.return_value = []
-            mock_conf_model.parameters.return_value = []
-            mock_create.return_value = (mock_std_model, mock_conf_model)
+            mock_doubt_model.parameters.return_value = []
+            mock_create.return_value = (mock_std_model, mock_doubt_model)
 
             # Run the experiment
             results = experiment.run(mock_tokenizer)
@@ -258,8 +259,8 @@ class TestConfidenceAwareExperiment:
             mock_tokenizer,
         )
 
-        mock_train_conf.assert_called_once_with(
-            mock_conf_model,
+        mock_train_doubt.assert_called_once_with(
+            mock_doubt_model,
             mock_dataloaders["train"],
             mock_dataloaders["eval"],
             experiment.device,
@@ -268,19 +269,19 @@ class TestConfidenceAwareExperiment:
         )
 
         # Verify results structure
-        assert isinstance(results, ConfidenceExperimentResults)
+        assert isinstance(results, DoubtExperimentResults)
         assert "42" in results.standard_model_results
-        assert "42" in results.confidence_model_results
+        assert "42" in results.doubt_model_results
 
         # Verify save_results was called
         mock_save_results.assert_called_once()
 
     @pytest.mark.unit
     def test_two_pass_training_step_signature(self):
-        """Test that ConfidenceAwareGPT.two_pass_training_step has correct signature."""
+        """Test that DoubtAwareGPT.two_pass_training_step has correct signature."""
         import inspect
 
-        sig = inspect.signature(ConfidenceAwareGPT.two_pass_training_step)
+        sig = inspect.signature(DoubtAwareGPT.two_pass_training_step)
 
         # Check required parameters (updated to match refactored signature)
         expected_params = [
@@ -300,9 +301,9 @@ class TestConfidenceAwareExperiment:
         """Test that dataclasses can be serialized to JSON."""
         import json
 
-        # Create ConfidenceTrainingResult
-        confidence_result = ConfidenceTrainingResult(
-            model_type="confidence",
+        # Create DoubtTrainingResult
+        doubt_result = DoubtTrainingResult(
+            model_type="doubt",
             seed=42,
             final_train_loss=2.5,
             final_eval_loss=2.8,
@@ -312,14 +313,14 @@ class TestConfidenceAwareExperiment:
             loss_history=[],
             training_time=100.0,
             config={"test": "value"},
-            confidence_loss_history=[0.5, 0.4, 0.3],
+            doubt_loss_history=[0.5, 0.4, 0.3],
             token_loss_history=[2.5, 2.4, 2.3],
             loss_predictions=[0.1, 0.2, 0.3],
             actual_future_losses=[2.6, 2.5, 2.4],
         )
 
         # Convert to dict (simulating what _save_results does)
-        result_dict = confidence_result.__dict__
+        result_dict = doubt_result.__dict__
 
         # Should be JSON serializable
         json_str = json.dumps(result_dict)
@@ -327,11 +328,11 @@ class TestConfidenceAwareExperiment:
 
         # Deserialize and verify
         loaded_dict = json.loads(json_str)
-        assert loaded_dict["model_type"] == "confidence"
+        assert loaded_dict["model_type"] == "doubt"
         assert loaded_dict["seed"] == 42
-        assert len(loaded_dict["confidence_loss_history"]) == 3
+        assert len(loaded_dict["doubt_loss_history"]) == 3
 
-        # Test ConfidenceExperimentResults serialization
+        # Test DoubtExperimentResults serialization
         from dendritic.experiments.utils.TrainingResult import TrainingResult
 
         standard_result = TrainingResult(
@@ -347,18 +348,18 @@ class TestConfidenceAwareExperiment:
             config={"test": "value"},
         )
 
-        results = ConfidenceExperimentResults(
+        results = DoubtExperimentResults(
             standard_model_results={"42": [standard_result]},
-            confidence_model_results={"42": [confidence_result]},
-            config=ConfidenceExperimentConfig(),
+            doubt_model_results={"42": [doubt_result]},
+            config=DoubtExperimentConfig(),
             timestamp="2024-01-01T00:00:00",
-            training_time={"standard": 95.0, "confidence": 110.0},
-            parameter_counts={"standard": 1000, "confidence": 1200},
+            training_time={"standard": 95.0, "doubt": 110.0},
+            parameter_counts={"standard": 1000, "doubt": 1200},
         )
 
         # Use the same conversion logic as in experiment.py
         def convert_to_serializable(obj):
-            if isinstance(obj, (TrainingResult, ConfidenceTrainingResult)):
+            if isinstance(obj, (TrainingResult, DoubtTrainingResult)):
                 return obj.__dict__
             elif hasattr(obj, "__dict__"):  # Handle dataclasses and other objects
                 return convert_to_serializable(obj.__dict__)
@@ -379,8 +380,8 @@ class TestConfidenceAwareExperiment:
         # Deserialize and verify
         loaded_dict = json.loads(json_str)
         assert "42" in loaded_dict["standard_model_results"]
-        assert "42" in loaded_dict["confidence_model_results"]
-        assert loaded_dict["parameter_counts"]["confidence"] == 1200
+        assert "42" in loaded_dict["doubt_model_results"]
+        assert loaded_dict["parameter_counts"]["doubt"] == 1200
 
 
 if __name__ == "__main__":

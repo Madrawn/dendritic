@@ -1,5 +1,5 @@
 """
-Sampling utilities for MiniGPT and ConfidenceAwareGPT models.
+Sampling utilities for MiniGPT and DoubtAwareGPT models.
 
 This module provides autoregressive sampling for models that don't have
 built-in `.generate()` methods.
@@ -18,15 +18,15 @@ class SamplingConfig:
     """Configuration for token sampling.
 
     Encapsulates all parameters needed for autoregressive sampling from
-    MiniGPT or ConfidenceAwareGPT models.
+    MiniGPT or DoubtAwareGPT models.
     """
 
     device: str = "cuda"
     max_new_tokens: int = 50
     temperature: float = 1.0
     top_p: float = 0.95
-    use_confidence: bool = False
-    include_confidence_formatting: bool = True
+    use_doubt: bool = False
+    include_doubt_formatting: bool = True
 
 
 def sample_tokens_from_model(
@@ -37,16 +37,16 @@ def sample_tokens_from_model(
     config: SamplingConfig,
 ) -> tuple[str, list[float] | None, list[int], list[int]]:
     """
-    Sample tokens from a MiniGPT or ConfidenceAwareGPT model using autoregressive generation.
+    Sample tokens from a MiniGPT or DoubtAwareGPT model using autoregressive generation.
 
-    For ConfidenceAwareGPT models with config.use_confidence=True:
-    - Start with confidence_scalars=None (model uses zeros)
-    - For each generated token, get confidence prediction from model
-    - Use that confidence prediction as input for next token (shifted right by 1)
+    For DoubtAwareGPT models with config.use_doubt=True:
+    - Start with doubt_scalars=None (model uses zeros)
+    - For each generated token, get doubt prediction from model
+    - Use that doubt prediction as input for next token (shifted right by 1)
     - Repeat
 
     Args:
-        model: MiniGPT or ConfidenceAwareGPT model
+        model: MiniGPT or DoubtAwareGPT model
         tokenizer: Tokenizer with encode/decode methods
         prompt: Text prompt to start generation
         config: Sampling configuration (SamplingConfig)
@@ -55,7 +55,7 @@ def sample_tokens_from_model(
         tuple: (generated_text, loss_predictions, generated_token_ids, full_token_ids)
         - generated_text: Generated text (including prompt)
         - loss_predictions: List of loss predictions for each generated token,
-                           or None if model is not ConfidenceAwareGPT
+                           or None if model is not DoubtAwareGPT
         - generated_token_ids: List of token IDs for generated tokens only
         - full_token_ids: Complete sequence of token IDs (prompt + generated)
     """
@@ -69,14 +69,14 @@ def sample_tokens_from_model(
     generated_token_ids = []
     full_token_ids = input_ids[0].tolist()  # Start with prompt token IDs
 
-    # Track loss predictions if model is ConfidenceAwareGPT
-    is_confidence_model = hasattr(model, "loss_predictor")
-    loss_predictions_list = [] if is_confidence_model else None
+    # Track loss predictions if model is DoubtAwareGPT
+    is_doubt_model = hasattr(model, "loss_predictor")
+    loss_predictions_list = [] if is_doubt_model else None
 
     # Initialize loss prediction scalars for the first step
-    # For confidence models with config.use_confidence=False, we pass None (model uses zeros)
-    # For confidence models with config.use_confidence=True, we'll build loss prediction scalars as we generate
-    confidence_scalars = None  # This remains "confidence_scalars" as it's the input to the model
+    # For doubt models with config.use_doubt=False, we pass None (model uses zeros)
+    # For doubt models with config.use_doubt=True, we'll build loss prediction scalars as we generate
+    doubt_scalars = None  # This remains "doubt_scalars" as it's the input to the model
     model_max_len = model.max_seq_len
     current_len = input_ids.shape[1]
     effective_max_new_tokens = config.max_new_tokens
@@ -92,17 +92,17 @@ def sample_tokens_from_model(
     with torch.no_grad():
         for _ in range(effective_max_new_tokens):
             # Get model output
-            logits, confidence_value = _get_model_logits(model, generated, is_confidence_model, confidence_scalars)
+            logits, doubt_value = _get_model_logits(model, generated, is_doubt_model, doubt_scalars)
 
             # Store loss prediction if available
-            if confidence_value is not None and loss_predictions_list is not None:
-                loss_predictions_list.append(confidence_value)
+            if doubt_value is not None and loss_predictions_list is not None:
+                loss_predictions_list.append(doubt_value)
 
-            # Update confidence scalars for next iteration if using confidence model
-            if is_confidence_model and config.use_confidence:
-                # loss_predictions_list is guaranteed to be not None when is_confidence_model is True
+            # Update doubt scalars for next iteration if using doubt model
+            if is_doubt_model and config.use_doubt:
+                # loss_predictions_list is guaranteed to be not None when is_doubt_model is True
                 assert loss_predictions_list is not None
-                confidence_scalars = _update_confidence_scalars_after_append(
+                doubt_scalars = _update_doubt_scalars_after_append(
                     loss_predictions_list, generated.shape[1] + 1, config.device
                 )
 
@@ -126,37 +126,35 @@ def sample_tokens_from_model(
 
 
 def _get_model_logits(
-    model: nn.Module, generated: torch.Tensor, is_confidence_model: bool, confidence_scalars: torch.Tensor | None
+    model: nn.Module, generated: torch.Tensor, is_doubt_model: bool, doubt_scalars: torch.Tensor | None
 ) -> tuple[torch.Tensor, float | None]:
-    """Get logits from model, handling both confidence and non-confidence models."""
+    """Get logits from model, handling both doubt and non-doubt models."""
     if not hasattr(model, "forward") or not callable(model.forward):
         raise ValueError(f"Model doesn't have a forward method: {type(model)}")
 
-    if is_confidence_model:
-        outputs = model(generated, confidence_scalars=confidence_scalars)
+    if is_doubt_model:
+        outputs = model(generated, doubt_scalars=doubt_scalars)
         logits = outputs["logits"]
         loss_prediction = outputs["loss_prediction"]
-        last_conf = None
+        last_doubt = None
         if loss_prediction is not None:
-            last_conf = loss_prediction[:, -1].item()
-        return logits, last_conf
+            last_doubt = loss_prediction[:, -1].item()
+        return logits, last_doubt
     else:
         logits = model(generated)
         return logits, None
 
 
-def _update_confidence_scalars_after_append(
-    loss_predictions_list: list, next_seq_len: int, device: str
-) -> torch.Tensor:
-    """Update confidence scalars for the next forward pass after appending a token."""
-    conf_tensor = torch.zeros((1, next_seq_len, 1), device=device, dtype=torch.float32)
+def _update_doubt_scalars_after_append(loss_predictions_list: list, next_seq_len: int, device: str) -> torch.Tensor:
+    """Update doubt scalars for the next forward pass after appending a token."""
+    doubt_tensor = torch.zeros((1, next_seq_len, 1), device=device, dtype=torch.float32)
 
     if len(loss_predictions_list) > 0:
         fill_length = min(len(loss_predictions_list), next_seq_len - 1)
-        conf_tensor[0, 1 : 1 + fill_length, 0] = torch.tensor(
+        doubt_tensor[0, 1 : 1 + fill_length, 0] = torch.tensor(
             loss_predictions_list[:fill_length], device=device, dtype=torch.float32
         )
-    return conf_tensor
+    return doubt_tensor
 
 
 def _sample_next_token(logits: torch.Tensor, temperature: float, top_p: float) -> torch.Tensor:
@@ -183,8 +181,8 @@ def _sample_next_token(logits: torch.Tensor, temperature: float, top_p: float) -
     return torch.multinomial(probs, num_samples=1)
 
 
-def format_tokens_with_confidence(
-    tokenizer, generated_token_ids: list[int], loss_predictions: list[float], confidence_precision: int = 1
+def format_tokens_with_doubt(
+    tokenizer, generated_token_ids: list[int], loss_predictions: list[float], doubt_precision: int = 1
 ) -> str:
     """
     Format tokens with loss predictions in parentheses.
@@ -193,7 +191,7 @@ def format_tokens_with_confidence(
         tokenizer: Tokenizer with decode method
         generated_token_ids: List of token IDs for generated tokens
         loss_predictions: List of loss prediction values for each generated token
-        confidence_precision: Number of decimal places for loss predictions
+        doubt_precision: Number of decimal places for loss predictions
 
     Returns:
         Formatted string like "token1(8.8) token2(7.1)"
@@ -210,7 +208,7 @@ def format_tokens_with_confidence(
         # Clean up whitespace (tokenizer.decode might add spaces)
         token_text = token_text.strip()
         # Format with loss prediction
-        loss_str = f"{loss_pred:.{confidence_precision}f}"
+        loss_str = f"{loss_pred:.{doubt_precision}f}"
         formatted_parts.append(f"{token_text}({loss_str})")
 
     return " ".join(formatted_parts)
@@ -236,10 +234,10 @@ def sample_model_output(
         config: Sampling configuration (SamplingConfig)
 
     Returns:
-        tuple: (generated_text, loss_predictions, formatted_tokens_with_confidence)
+        tuple: (generated_text, loss_predictions, formatted_tokens_with_doubt)
         - generated_text: Generated text
         - loss_predictions: List of loss predictions or None
-        - formatted_tokens_with_confidence: Formatted tokens with loss predictions or None
+        - formatted_tokens_with_doubt: Formatted tokens with loss predictions or None
     """
     try:
         generated, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
@@ -250,12 +248,12 @@ def sample_model_output(
         )
 
         formatted_tokens = None
-        if config.include_confidence_formatting and loss_predictions is not None:
-            formatted_tokens = format_tokens_with_confidence(
+        if config.include_doubt_formatting and loss_predictions is not None:
+            formatted_tokens = format_tokens_with_doubt(
                 tokenizer=tokenizer,
                 generated_token_ids=generated_token_ids,
                 loss_predictions=loss_predictions,
-                confidence_precision=1,
+                doubt_precision=1,
             )
 
         return generated, loss_predictions, formatted_tokens

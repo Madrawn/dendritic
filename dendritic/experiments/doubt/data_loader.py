@@ -1,5 +1,5 @@
 """
-Data loading utilities for confidence-aware GPT experiments.
+Data loading utilities for doubt-aware GPT experiments.
 
 This module provides functions to prepare data for two-pass lookahead training,
 where we need tokens at positions t and t+1.
@@ -12,11 +12,11 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 
 from dendritic.dataset_handlers.factory import get_handler
 from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
-from .config import ConfidenceExperimentConfig
+from .config import DoubtExperimentConfig
 
 
-class ConfidenceDataset(Dataset):
-    """Dataset wrapper for confidence-aware training with lookahead.
+class DoubtDataset(Dataset):
+    """Dataset wrapper for doubt-aware training with lookahead.
 
     Takes a standard DataLoader and extracts sequences of length seq_len + 1,
     then provides pairs (tokens_t, tokens_t_plus_1).
@@ -49,14 +49,14 @@ class ConfidenceDataset(Dataset):
         return tokens_t, tokens_t_plus_1
 
 
-def prepare_confidence_data(
-    config: ConfidenceExperimentConfig,
+def prepare_doubt_data(
+    config: DoubtExperimentConfig,
     tokenizer: PreTrainedTokenizer,
     dataset_kwargs: Optional[Dict[str, Any]] = None,
     num_workers: int = 0,
 ) -> Dict[str, DataLoader]:
     """
-    Prepare data for confidence-aware experiments with two-pass lookahead training.
+    Prepare data for doubt-aware experiments with two-pass lookahead training.
 
     This function loads standard dataset using existing dataset handlers,
     creates sequences of length `seq_len + 1` (where seq_len is the context window),
@@ -64,7 +64,7 @@ def prepare_confidence_data(
 
     Parameters
     ----------
-    config : ConfidenceExperimentConfig
+    config : DoubtExperimentConfig
         Configuration object containing dataset, max_seq_len, batch_size, etc.
     tokenizer : PreTrainedTokenizer
         Tokenizer for the dataset.
@@ -83,7 +83,7 @@ def prepare_confidence_data(
     -----
     - The standard dataset handler returns sequences of length `max_seq_len` with
       labels shifted by 1 position for next-token prediction.
-    - For confidence training, we need sequences of length `max_seq_len + 1` to
+    - For doubt training, we need sequences of length `max_seq_len + 1` to
       have tokens at t and t+1 positions.
     - This function adapts the existing data loading to produce the required pairs.
     """
@@ -107,23 +107,23 @@ def prepare_confidence_data(
         config=modified_config, num_workers=num_workers, kwargs=dataset_kwargs
     )
 
-    # Convert standard batches to confidence format
-    train_loader = _convert_to_confidence_loader(
+    # Convert standard batches to doubt format
+    train_loader = _convert_to_doubt_loader(
         standard_loaders["train"], config.max_seq_len, config.batch_size, shuffle=True
     )
 
-    eval_loader = _convert_to_confidence_loader(
+    eval_loader = _convert_to_doubt_loader(
         standard_loaders["eval"], config.max_seq_len, config.batch_size, shuffle=False
     )
 
     return {"train": train_loader, "eval": eval_loader}
 
 
-def _create_modified_config(config: ConfidenceExperimentConfig) -> PretrainingConfig:
+def _create_modified_config(config: DoubtExperimentConfig) -> PretrainingConfig:
     """
     Create a modified config with increased sequence length for lookahead.
 
-    The confidence experiment needs sequences of length max_seq_len + 1
+    The doubt experiment needs sequences of length max_seq_len + 1
     to have tokens at t and t+1 positions.
     """
     # Create a copy of the config with modified max_seq_len
@@ -169,7 +169,7 @@ def _create_modified_config(config: ConfidenceExperimentConfig) -> PretrainingCo
     return modified
 
 
-def confidence_collate_fn(batch):
+def doubt_collate_fn(batch):
     """Collate function that returns a tuple of two tensors."""
     # batch is a list of tuples: [(tokens_t1, tokens_t_plus_11), ...]
     # We need to stack each component separately
@@ -178,14 +178,14 @@ def confidence_collate_fn(batch):
     return (tokens_t_batch, tokens_t_plus_1_batch)
 
 
-def _convert_to_confidence_loader(
+def _convert_to_doubt_loader(
     dataloader: DataLoader,
     seq_len: int,
     batch_size: int,
     shuffle: bool = True,
 ) -> DataLoader:
     """
-    Convert a standard dataloader to produce confidence training pairs.
+    Convert a standard dataloader to produce doubt training pairs.
 
     Standard batches have shape (batch_size, seq_len + 1) for input_ids.
     We need to extract:
@@ -196,7 +196,7 @@ def _convert_to_confidence_loader(
     """
 
     # Create the dataset using the module-level class
-    dataset = ConfidenceDataset(dataloader, seq_len)
+    dataset = DoubtDataset(dataloader, seq_len)
 
     # Create a new DataLoader with custom collate function
     # Use num_workers=0 for Windows compatibility (multiprocessing pickling issues)
@@ -207,16 +207,16 @@ def _convert_to_confidence_loader(
         num_workers=0,  # Force 0 for compatibility; can be overridden if needed
         pin_memory=dataloader.pin_memory,
         drop_last=dataloader.drop_last,
-        collate_fn=confidence_collate_fn,
+        collate_fn=doubt_collate_fn,
     )
 
 
-def create_confidence_batch_from_sequences(
+def create_doubt_batch_from_sequences(
     input_ids: torch.Tensor,
     seq_len: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Create confidence training pairs from a batch of sequences.
+    Create doubt training pairs from a batch of sequences.
 
     Parameters
     ----------

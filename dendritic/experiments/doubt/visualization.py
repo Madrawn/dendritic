@@ -1,8 +1,8 @@
 """
-Visualization utilities for confidence-aware experiment results.
+Visualization utilities for doubt-aware experiment results.
 
 This module provides plotting functions for analyzing and visualizing
-results from confidence-aware GPT experiments.
+results from doubt-aware GPT experiments.
 """
 
 import json
@@ -13,20 +13,20 @@ from matplotlib.axes import Axes
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
-from .results import ConfidenceExperimentResults, load_results
+from .results import DoubtExperimentResults, load_results
 
 
 def plot_loss_curves(
-    results: Union[ConfidenceExperimentResults, str, Path, Dict],
+    results: Union[DoubtExperimentResults, str, Path, Dict],
     output_path: Optional[Union[str, Path]] = None,
     show: bool = True,
     figsize: tuple = (14, 10),
 ) -> Figure:
     """
-    Plot loss curves for both standard and confidence models.
+    Plot loss curves for both standard and doubt models.
 
     Args:
-        results: ConfidenceExperimentResults object, path to JSON file, or results dict
+        results: DoubtExperimentResults object, path to JSON file, or results dict
         output_path: Optional path to save figure
         show: Whether to display the plot
         figsize: Figure size (width, height)
@@ -38,7 +38,7 @@ def plot_loss_curves(
     if isinstance(results, (str, Path)):
         results = load_results(Path(results))
     elif isinstance(results, dict):
-        results = ConfidenceExperimentResults.from_dict(results)
+        results = DoubtExperimentResults.from_dict(results)
 
     fig, axes = plt.subplots(2, 2, figsize=figsize)
     ax1, ax2, ax3, ax4 = axes.flat
@@ -46,13 +46,13 @@ def plot_loss_curves(
     # Plot 1: Token loss comparison
     _plot_token_loss_comparison(results, ax1)
 
-    # Plot 2: Confidence loss (confidence model only)
-    _plot_confidence_loss(results, ax2)
+    # Plot 2: Doubt loss (doubt model only)
+    _plot_doubt_loss(results, ax2)
 
     # Plot 3: Evaluation loss over time
     _plot_eval_loss_comparison(results, ax3)
 
-    # Plot 4: Confidence predictions vs actual future losses
+    # Plot 4: Doubt predictions vs actual future losses
     _plot_calibration_scatter(results, ax4)
 
     plt.tight_layout()
@@ -66,16 +66,16 @@ def plot_loss_curves(
 
 
 def plot_calibration_curve(
-    results: Union[ConfidenceExperimentResults, str, Path, Dict],
+    results: Union[DoubtExperimentResults, str, Path, Dict],
     output_path: Optional[Union[str, Path]] = None,
     show: bool = True,
     figsize: tuple = (10, 8),
 ) -> Figure:
     """
-    Plot calibration curve showing predicted confidence vs actual future loss.
+    Plot calibration curve showing predicted doubt vs actual future loss.
 
     Args:
-        results: ConfidenceExperimentResults object, path to JSON file, or results dict
+        results: DoubtExperimentResults object, path to JSON file, or results dict
         output_path: Optional path to save figure
         show: Whether to display the plot
         figsize: Figure size (width, height)
@@ -87,7 +87,7 @@ def plot_calibration_curve(
     if isinstance(results, (str, Path)):
         results = load_results(Path(results))
     elif isinstance(results, dict):
-        results = ConfidenceExperimentResults.from_dict(results)
+        results = DoubtExperimentResults.from_dict(results)
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
     ax1, ax2 = axes
@@ -109,16 +109,16 @@ def plot_calibration_curve(
 
 
 def plot_training_time_comparison(
-    results: Union[ConfidenceExperimentResults, str, Path, Dict],
+    results: Union[DoubtExperimentResults, str, Path, Dict],
     output_path: Optional[Union[str, Path]] = None,
     show: bool = True,
     figsize: tuple = (8, 6),
 ) -> Figure:
     """
-    Plot training time comparison between standard and confidence models.
+    Plot training time comparison between standard and doubt models.
 
     Args:
-        results: ConfidenceExperimentResults object, path to JSON file, or results dict
+        results: DoubtExperimentResults object, path to JSON file, or results dict
         output_path: Optional path to save figure
         show: Whether to display the plot
         figsize: Figure size (width, height)
@@ -130,12 +130,12 @@ def plot_training_time_comparison(
     if isinstance(results, (str, Path)):
         results = load_results(Path(results))
     elif isinstance(results, dict):
-        results = ConfidenceExperimentResults.from_dict(results)
+        results = DoubtExperimentResults.from_dict(results)
 
     fig, ax = plt.subplots(figsize=figsize)
 
     # Extract training times
-    model_types = ["standard", "confidence"]
+    model_types = ["standard", "doubt"]
     training_times = [results.training_time.get(model_type, 0.0) for model_type in model_types]
 
     # Create bar chart
@@ -186,13 +186,13 @@ def plot_training_time_comparison(
 
 
 def generate_summary_statistics(
-    results: Union[ConfidenceExperimentResults, str, Path, Dict],
+    results: Union[DoubtExperimentResults, str, Path, Dict],
 ) -> Dict[str, Dict[str, float]]:
     """
-    Generate summary statistics for confidence experiment results.
+    Generate summary statistics for doubt experiment results.
 
     Args:
-        results: ConfidenceExperimentResults object, path to JSON file, or results dict
+        results: DoubtExperimentResults object, path to JSON file, or results dict
 
     Returns:
         Dictionary containing summary statistics for both model types
@@ -201,9 +201,9 @@ def generate_summary_statistics(
     if isinstance(results, (str, Path)):
         results = load_results(Path(results))
     elif isinstance(results, dict):
-        results = ConfidenceExperimentResults.from_dict(results)
+        results = DoubtExperimentResults.from_dict(results)
 
-    stats = {"standard": {}, "confidence": {}}
+    stats = {"standard": {}, "doubt": {}}
 
     # Helper function to extract metrics from results
     def extract_metrics(model_results_dict, model_type="standard"):
@@ -237,32 +237,32 @@ def generate_summary_statistics(
 
     # Extract metrics for both model types
     stats["standard"] = extract_metrics(results.standard_model_results, "standard")
-    stats["confidence"] = extract_metrics(results.confidence_model_results, "confidence")
+    stats["doubt"] = extract_metrics(results.doubt_model_results, "doubt")
 
     # Calculate relative improvements
-    if stats["standard"] and stats["confidence"]:
+    if stats["standard"] and stats["doubt"]:
         std_loss = stats["standard"].get("final_eval_loss_mean", 0)
-        conf_loss = stats["confidence"].get("final_eval_loss_mean", 0)
+        doubt_loss = stats["doubt"].get("final_eval_loss_mean", 0)
         if std_loss > 0:
-            relative_improvement = (std_loss - conf_loss) / std_loss * 100
+            relative_improvement = (std_loss - doubt_loss) / std_loss * 100
             stats["comparison"] = {
                 "relative_improvement_percent": float(relative_improvement),
-                "absolute_improvement": float(std_loss - conf_loss),
+                "absolute_improvement": float(std_loss - doubt_loss),
             }
 
     return stats
 
 
 # Internal helper functions
-def _plot_token_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
-    """Plot token loss comparison between standard and confidence models."""
+def _plot_token_loss_comparison(results: DoubtExperimentResults, ax: Axes):
+    """Plot token loss comparison between standard and doubt models."""
     # Extract token loss histories
     std_token_losses = []
-    conf_token_losses = []
+    doubt_token_losses = []
 
-    for seed, result_list in results.confidence_model_results.items():
+    for seed, result_list in results.doubt_model_results.items():
         for result in result_list:
-            conf_token_losses.extend(result.token_loss_history)
+            doubt_token_losses.extend(result.token_loss_history)
 
     # Standard models don't have token_loss_history, use loss_history instead
     for seed, result_list in results.standard_model_results.items():
@@ -273,9 +273,9 @@ def _plot_token_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
                 std_token_losses.extend(train_losses)
 
     # Plot histograms
-    if std_token_losses and conf_token_losses:
+    if std_token_losses and doubt_token_losses:
         ax.hist(std_token_losses, bins=50, alpha=0.5, label="Standard", color="blue")
-        ax.hist(conf_token_losses, bins=50, alpha=0.5, label="Confidence", color="orange")
+        ax.hist(doubt_token_losses, bins=50, alpha=0.5, label="Doubt", color="orange")
         ax.set_xlabel("Token Loss")
         ax.set_ylabel("Frequency")
         ax.set_title("Token Loss Distribution")
@@ -293,27 +293,27 @@ def _plot_token_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
         ax.set_title("Token Loss Distribution")
 
 
-def _plot_confidence_loss(results: ConfidenceExperimentResults, ax: Axes):
-    """Plot confidence loss history."""
-    confidence_losses = []
+def _plot_doubt_loss(results: DoubtExperimentResults, ax: Axes):
+    """Plot doubt loss history."""
+    doubt_losses = []
 
-    for seed, result_list in results.confidence_model_results.items():
+    for seed, result_list in results.doubt_model_results.items():
         for result in result_list:
-            confidence_losses.extend(result.confidence_loss_history)
+            doubt_losses.extend(result.doubt_loss_history)
 
-    if confidence_losses:
-        steps = range(len(confidence_losses))
-        ax.plot(steps, confidence_losses, color="red", alpha=0.7)
+    if doubt_losses:
+        steps = range(len(doubt_losses))
+        ax.plot(steps, doubt_losses, color="red", alpha=0.7)
         ax.set_xlabel("Training Step")
-        ax.set_ylabel("Confidence Loss")
-        ax.set_title("Confidence Loss Over Time")
+        ax.set_ylabel("Doubt Loss")
+        ax.set_title("Doubt Loss Over Time")
         ax.grid(True, alpha=0.3)
         ax.set_ylim(0, 15)  # Cap y-axis at 15 for loss plots
 
         # Add rolling average
-        if len(confidence_losses) > 100:
-            window = min(100, len(confidence_losses) // 10)
-            rolling_avg = np.convolve(confidence_losses, np.ones(window) / window, mode="valid")
+        if len(doubt_losses) > 100:
+            window = min(100, len(doubt_losses) // 10)
+            rolling_avg = np.convolve(doubt_losses, np.ones(window) / window, mode="valid")
             ax.plot(
                 steps[window - 1 :],
                 rolling_avg,
@@ -326,21 +326,21 @@ def _plot_confidence_loss(results: ConfidenceExperimentResults, ax: Axes):
         ax.text(
             0.5,
             0.5,
-            "No confidence loss data available",
+            "No doubt loss data available",
             ha="center",
             va="center",
             transform=ax.transAxes,
         )
-        ax.set_title("Confidence Loss Over Time")
+        ax.set_title("Doubt Loss Over Time")
 
 
-def _plot_eval_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
+def _plot_eval_loss_comparison(results: DoubtExperimentResults, ax: Axes):
     """Plot evaluation loss comparison over training."""
     # Extract evaluation losses from loss_history
     std_eval_losses = []
-    conf_eval_losses = []
+    doubt_eval_losses = []
     std_steps = []
-    conf_steps = []
+    doubt_steps = []
 
     for seed, result_list in results.standard_model_results.items():
         for result in result_list:
@@ -350,26 +350,26 @@ def _plot_eval_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
                 std_steps.extend(steps)
                 std_eval_losses.extend(eval_losses)
 
-    for seed, result_list in results.confidence_model_results.items():
+    for seed, result_list in results.doubt_model_results.items():
         for result in result_list:
             if result.loss_history:
                 steps = [h.get("step", i) for i, h in enumerate(result.loss_history)]
                 eval_losses = [h.get("perplexity", 0) for h in result.loss_history]
-                conf_steps.extend(steps)
-                conf_eval_losses.extend(eval_losses)
+                doubt_steps.extend(steps)
+                doubt_eval_losses.extend(eval_losses)
 
-    if std_eval_losses and conf_eval_losses:
+    if std_eval_losses and doubt_eval_losses:
         # Sort by steps for cleaner plotting
         std_data = sorted(zip(std_steps, std_eval_losses))
-        conf_data = sorted(zip(conf_steps, conf_eval_losses))
+        doubt_data = sorted(zip(doubt_steps, doubt_eval_losses))
 
         if std_data:
             std_steps_sorted, std_eval_sorted = zip(*std_data)
             ax.plot(std_steps_sorted, std_eval_sorted, "b-", alpha=0.7, label="Standard")
 
-        if conf_data:
-            conf_steps_sorted, conf_eval_sorted = zip(*conf_data)
-            ax.plot(conf_steps_sorted, conf_eval_sorted, "r-", alpha=0.7, label="Confidence")
+        if doubt_data:
+            doubt_steps_sorted, doubt_eval_sorted = zip(*doubt_data)
+            ax.plot(doubt_steps_sorted, doubt_eval_sorted, "r-", alpha=0.7, label="Doubt")
 
         ax.set_xlabel("Training Step")
         ax.set_ylabel("Perplexity")
@@ -389,12 +389,12 @@ def _plot_eval_loss_comparison(results: ConfidenceExperimentResults, ax: Axes):
         ax.set_title("Evaluation Loss Comparison")
 
 
-def _plot_calibration_scatter(results: ConfidenceExperimentResults, ax: Axes):
+def _plot_calibration_scatter(results: DoubtExperimentResults, ax: Axes):
     """Plot scatter plot of loss predictions vs actual future losses."""
     loss_predictions = []
     actual_future_losses = []
 
-    for seed, result_list in results.confidence_model_results.items():
+    for seed, result_list in results.doubt_model_results.items():
         for result in result_list:
             if result.loss_predictions and result.actual_future_losses:
                 # Take matching lengths
@@ -428,12 +428,12 @@ def _plot_calibration_scatter(results: ConfidenceExperimentResults, ax: Axes):
         ax.set_title("Loss Prediction Calibration Scatter")
 
 
-def _plot_binned_calibration(results: ConfidenceExperimentResults, ax: Axes):
+def _plot_binned_calibration(results: DoubtExperimentResults, ax: Axes):
     """Plot binned calibration curve."""
     loss_predictions = []
     actual_future_losses = []
 
-    for seed, result_list in results.confidence_model_results.items():
+    for seed, result_list in results.doubt_model_results.items():
         for result in result_list:
             if result.loss_predictions and result.actual_future_losses:
                 min_len = min(len(result.loss_predictions), len(result.actual_future_losses))

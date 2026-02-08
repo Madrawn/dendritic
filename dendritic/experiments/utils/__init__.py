@@ -15,9 +15,9 @@ from .experiment_utils import (
 from .ExperimentResults import ExperimentResults
 from .loss_utils import (
     compute_language_modeling_loss,
-    compute_confidence_loss,
+    compute_doubt_loss,
     compute_sequence_language_modeling_loss,
-    compute_total_confidence_aware_loss,
+    compute_total_doubt_aware_loss,
 )
 from .param_utils import count_parameters
 from .PretrainingConfig import PretrainingConfig
@@ -35,9 +35,9 @@ __all__ = [
     "debug_dataset_integrity",
     "ExperimentResults",
     "compute_language_modeling_loss",
-    "compute_confidence_loss",
+    "compute_doubt_loss",
     "compute_sequence_language_modeling_loss",
-    "compute_total_confidence_aware_loss",
+    "compute_total_doubt_aware_loss",
     "count_parameters",
     "PretrainingConfig",
     "run_sweep",

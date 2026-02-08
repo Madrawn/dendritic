@@ -1,7 +1,7 @@
 # ruff: noqa: PLR6301, PLR2004
 
 """
-Unit tests for confidence experiment data loader.
+Unit tests for doubt experiment data loader.
 """
 
 import pytest
@@ -9,12 +9,12 @@ import torch
 from unittest.mock import Mock, patch
 from torch.utils.data import DataLoader, Dataset
 
-from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
-from dendritic.experiments.confidence.data_loader import (
-    prepare_confidence_data,
+from dendritic.experiments.doubt.config import DoubtExperimentConfig
+from dendritic.experiments.doubt.data_loader import (
+    prepare_doubt_data,
     _create_modified_config,
-    _convert_to_confidence_loader,
-    create_confidence_batch_from_sequences,
+    _convert_to_doubt_loader,
+    create_doubt_batch_from_sequences,
 )
 from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
 
@@ -147,42 +147,42 @@ def mock_tokenizer():
 
 
 @pytest.fixture
-def confidence_config():
-    """Create a ConfidenceExperimentConfig for testing."""
-    return ConfidenceExperimentConfig(
+def doubt_config():
+    """Create a DoubtExperimentConfig for testing."""
+    return DoubtExperimentConfig(
         max_seq_len=128,
         batch_size=4,
         dataset="test_dataset",
         training_steps=100,
         eval_split_ratio=0.1,
-        confidence_alpha=1.0,
+        doubt_alpha=1.0,
         lookahead_steps=2,
-        confidence_init_bias=2.0,
+        doubt_init_bias=2.0,
     )
 
 
 @pytest.mark.unit
-def test_create_modified_config(confidence_config):
+def test_create_modified_config(doubt_config):
     """Test that _create_modified_config increases sequence length by 1."""
-    modified = _create_modified_config(confidence_config)
+    modified = _create_modified_config(doubt_config)
 
-    # Should be a PretrainingConfig (not ConfidenceExperimentConfig)
+    # Should be a PretrainingConfig (not DoubtExperimentConfig)
     assert isinstance(modified, PretrainingConfig)
-    assert not isinstance(modified, ConfidenceExperimentConfig)
+    assert not isinstance(modified, DoubtExperimentConfig)
 
     # Sequence length should be increased by 1
-    assert modified.max_seq_len == confidence_config.max_seq_len + 1
+    assert modified.max_seq_len == doubt_config.max_seq_len + 1
 
     # Other fields should be copied
-    assert modified.vocab_size == confidence_config.vocab_size
-    assert modified.embed_dim == confidence_config.embed_dim
-    assert modified.batch_size == confidence_config.batch_size
-    assert modified.dataset == confidence_config.dataset
+    assert modified.vocab_size == doubt_config.vocab_size
+    assert modified.embed_dim == doubt_config.embed_dim
+    assert modified.batch_size == doubt_config.batch_size
+    assert modified.dataset == doubt_config.dataset
 
 
 @pytest.mark.unit
-def test_create_confidence_batch_from_sequences():
-    """Test the create_confidence_batch_from_sequences function."""
+def test_create_doubt_batch_from_sequences():
+    """Test the create_doubt_batch_from_sequences function."""
     batch_size = 3
     seq_len = 5
     total_len = seq_len + 1
@@ -191,7 +191,7 @@ def test_create_confidence_batch_from_sequences():
     input_ids = torch.randint(0, 1000, (batch_size, total_len))
 
     # Extract pairs
-    tokens_t, tokens_t_plus_1 = create_confidence_batch_from_sequences(input_ids, seq_len)
+    tokens_t, tokens_t_plus_1 = create_doubt_batch_from_sequences(input_ids, seq_len)
 
     # Check shapes
     assert tokens_t.shape == (batch_size, seq_len)
@@ -207,21 +207,21 @@ def test_create_confidence_batch_from_sequences():
 
 
 @pytest.mark.unit
-def test_create_confidence_batch_from_sequences_errors():
-    """Test error cases for create_confidence_batch_from_sequences."""
+def test_create_doubt_batch_from_sequences_errors():
+    """Test error cases for create_doubt_batch_from_sequences."""
     # Test with wrong dimensions
     with pytest.raises(ValueError, match="Expected 2D tensor"):
-        create_confidence_batch_from_sequences(torch.randn(3, 4, 5), seq_len=3)
+        create_doubt_batch_from_sequences(torch.randn(3, 4, 5), seq_len=3)
 
     # Test with insufficient length
     input_ids = torch.randint(0, 1000, (2, 3))  # length 3
     with pytest.raises(ValueError, match="Sequence length 3 is less than required"):
-        create_confidence_batch_from_sequences(input_ids, seq_len=3)  # needs 3+1=4
+        create_doubt_batch_from_sequences(input_ids, seq_len=3)  # needs 3+1=4
 
 
 @pytest.mark.unit
-def test_convert_to_confidence_loader():
-    """Test _convert_to_confidence_loader function."""
+def test_convert_to_doubt_loader():
+    """Test _convert_to_doubt_loader function."""
     batch_size = 2
     seq_len = 8
     total_len = seq_len + 1
@@ -237,11 +237,11 @@ def test_convert_to_confidence_loader():
     dataset = MockDataset()
     original_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
 
-    # Convert to confidence loader
-    confidence_loader = _convert_to_confidence_loader(original_loader, seq_len, batch_size)
+    # Convert to doubt loader
+    doubt_loader = _convert_to_doubt_loader(original_loader, seq_len, batch_size)
 
     # Check that we get pairs
-    for batch in confidence_loader:
+    for batch in doubt_loader:
         tokens_t, tokens_t_plus_1 = batch
 
         # Check shapes
@@ -258,9 +258,9 @@ def test_convert_to_confidence_loader():
 
 
 @pytest.mark.unit
-@patch("dendritic.experiments.confidence.data_loader.get_handler")
-def test_prepare_confidence_data_mock(mock_get_handler, confidence_config, mock_tokenizer):
-    """Test prepare_confidence_data with mocked handler."""
+@patch("dendritic.experiments.doubt.data_loader.get_handler")
+def test_prepare_doubt_data_mock(mock_get_handler, doubt_config, mock_tokenizer):
+    """Test prepare_doubt_data with mocked handler."""
     # Setup mock handler with mocked prepare_pretraining_dataloaders
     mock_handler = Mock(spec=MockDatasetHandler)
 
@@ -278,18 +278,18 @@ def test_prepare_confidence_data_mock(mock_get_handler, confidence_config, mock_
             return {"input_ids": input_ids}
 
     # Create real dataloaders with mock dataset
-    seq_len = confidence_config.max_seq_len
+    seq_len = doubt_config.max_seq_len
     mock_dataset = MockDataset(seq_len)
     mock_train_loader = DataLoader(
         mock_dataset,
-        batch_size=confidence_config.batch_size,
+        batch_size=doubt_config.batch_size,
         shuffle=True,
         num_workers=0,
         drop_last=True,
     )
     mock_eval_loader = DataLoader(
         mock_dataset,
-        batch_size=confidence_config.batch_size,
+        batch_size=doubt_config.batch_size,
         shuffle=False,
         num_workers=0,
         drop_last=True,
@@ -302,9 +302,9 @@ def test_prepare_confidence_data_mock(mock_get_handler, confidence_config, mock_
 
     mock_get_handler.return_value = mock_handler
 
-    # Call prepare_confidence_data
-    loaders = prepare_confidence_data(
-        config=confidence_config,
+    # Call prepare_doubt_data
+    loaders = prepare_doubt_data(
+        config=doubt_config,
         tokenizer=mock_tokenizer,
         dataset_kwargs={"max_samples": 100},
         num_workers=0,
@@ -313,43 +313,43 @@ def test_prepare_confidence_data_mock(mock_get_handler, confidence_config, mock_
     # Check that get_handler was called with correct arguments
     mock_get_handler.assert_called_once()
     call_args = mock_get_handler.call_args
-    assert call_args[0][0] == confidence_config.dataset
+    assert call_args[0][0] == doubt_config.dataset
     assert call_args[0][1] == mock_tokenizer
-    assert call_args[1]["max_length"] == confidence_config.max_seq_len + 1
+    assert call_args[1]["max_length"] == doubt_config.max_seq_len + 1
     # max_samples should NOT be passed to get_handler, it should be passed to prepare_pretraining_dataloaders
     assert "max_samples" not in call_args[1]
 
     # Check that prepare_pretraining_dataloaders was called
     mock_handler.prepare_pretraining_dataloaders.assert_called_once()
 
-    # Check returned loaders (they should be converted confidence loaders, not the mock ones)
+    # Check returned loaders (they should be converted doubt loaders, not the mock ones)
     assert "train" in loaders
     assert "eval" in loaders
     assert isinstance(loaders["train"], DataLoader)
     assert isinstance(loaders["eval"], DataLoader)
 
-    # Check that confidence loaders yield pairs
+    # Check that doubt loaders yield pairs
     for loader_name, loader in loaders.items():
         for batch in loader:
             tokens_t, tokens_t_plus_1 = batch
             assert tokens_t.shape == (
-                confidence_config.batch_size,
-                confidence_config.max_seq_len,
+                doubt_config.batch_size,
+                doubt_config.max_seq_len,
             )
             # tokens_t_plus_1 is a single token (not a sequence)
-            assert tokens_t_plus_1.shape == (confidence_config.batch_size,)
+            assert tokens_t_plus_1.shape == (doubt_config.batch_size,)
             break  # Just test first batch
 
 
 @pytest.mark.unit
-@patch("dendritic.experiments.confidence.data_loader.get_handler")
-def test_prepare_confidence_data_small_dataset(mock_get_handler, confidence_config, mock_tokenizer):
-    """Test prepare_confidence_data with small dataset."""
+@patch("dendritic.experiments.doubt.data_loader.get_handler")
+def test_prepare_doubt_data_small_dataset(mock_get_handler, doubt_config, mock_tokenizer):
+    """Test prepare_doubt_data with small dataset."""
 
     mock_get_handler.return_value = SmallHandler()
 
     # This should work
-    loaders = prepare_confidence_data(config=confidence_config, tokenizer=mock_tokenizer, num_workers=0)
+    loaders = prepare_doubt_data(config=doubt_config, tokenizer=mock_tokenizer, num_workers=0)
 
     assert "train" in loaders
     assert "eval" in loaders
@@ -360,14 +360,14 @@ def test_prepare_confidence_data_small_dataset(mock_get_handler, confidence_conf
 
 
 @pytest.mark.unit
-def test_prepare_confidence_data_integration(confidence_config, mock_tokenizer):
-    """Integration test for prepare_confidence_data with actual handler patching."""
+def test_prepare_doubt_data_integration(doubt_config, mock_tokenizer):
+    """Integration test for prepare_doubt_data with actual handler patching."""
     # We'll patch the handler factory to return our mock handler
-    with patch("dendritic.experiments.confidence.data_loader.get_handler") as mock_get:
+    with patch("dendritic.experiments.doubt.data_loader.get_handler") as mock_get:
         mock_handler = MockDatasetHandler(mock_tokenizer)
         mock_get.return_value = mock_handler
 
-        loaders = prepare_confidence_data(config=confidence_config, tokenizer=mock_tokenizer, num_workers=0)
+        loaders = prepare_doubt_data(config=doubt_config, tokenizer=mock_tokenizer, num_workers=0)
 
         # Verify the loaders produce the expected format
         train_loader = loaders["train"]
@@ -379,17 +379,17 @@ def test_prepare_confidence_data_integration(confidence_config, mock_tokenizer):
 
         tokens_t, tokens_t_plus_1 = first_batch
         assert tokens_t.shape == (
-            confidence_config.batch_size,
-            confidence_config.max_seq_len,
+            doubt_config.batch_size,
+            doubt_config.max_seq_len,
         )
         # tokens_t_plus_1 is a single token (not a sequence)
-        assert tokens_t_plus_1.shape == (confidence_config.batch_size,)
+        assert tokens_t_plus_1.shape == (doubt_config.batch_size,)
 
 
 @pytest.mark.unit
-def test_confidence_dataset_wrapper():
-    """Test the internal ConfidenceDataset class."""
-    # This tests the internal class by calling _convert_to_confidence_loader
+def test_doubt_dataset_wrapper():
+    """Test the internal DoubtDataset class."""
+    # This tests the internal class by calling _convert_to_doubt_loader
     batch_size = 2
     seq_len = 10
     total_len = seq_len + 1
@@ -405,11 +405,11 @@ def test_confidence_dataset_wrapper():
     dataset = SimpleDataset()
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
-    # Convert to confidence loader
-    confidence_loader = _convert_to_confidence_loader(dataloader, seq_len, batch_size=1, shuffle=False)
+    # Convert to doubt loader
+    doubt_loader = _convert_to_doubt_loader(dataloader, seq_len, batch_size=1, shuffle=False)
 
     # Check all batches
-    for i, (tokens_t, tokens_t_plus_1) in enumerate(confidence_loader):
+    for i, (tokens_t, tokens_t_plus_1) in enumerate(doubt_loader):
         # Each batch should have shape (1, seq_len) for tokens_t, single token for tokens_t_plus_1
         assert tokens_t.shape == (1, seq_len)
         assert tokens_t_plus_1.shape == (1,)

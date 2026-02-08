@@ -1,14 +1,14 @@
 # ruff: noqa: PLR6301, PLR2004
 
 """
-Tests for token sampling functionality in confidence experiments.
+Tests for token sampling functionality in doubt experiments.
 """
 
 import pytest
 import torch
 from torch import nn
 from unittest.mock import patch
-from dendritic.experiments.confidence.sampling_utils import (
+from dendritic.experiments.doubt.sampling_utils import (
     sample_tokens_from_model,
     sample_model_output,
     SamplingConfig,
@@ -78,14 +78,14 @@ class MockMiniGPT(nn.Module):
         return torch.randn(batch_size, seq_len, self.vocab_size)
 
 
-class MockConfidenceAwareGPT(MockMiniGPT):
-    """Mock ConfidenceAwareGPT model for testing."""
+class MockDoubtAwareGPT(MockMiniGPT):
+    """Mock DoubtAwareGPT model for testing."""
 
     def __init__(self):
         super().__init__()
         self.loss_predictor = nn.Linear(10, 1)
 
-    def forward(self, input_ids, confidence_scalars=None) -> dict[str, torch.Tensor] | torch.Tensor:
+    def forward(self, input_ids, doubt_scalars=None) -> dict[str, torch.Tensor] | torch.Tensor:
         """Mock forward method."""
         batch_size, seq_len = input_ids.shape
         return {
@@ -115,9 +115,9 @@ def test_sample_tokens_from_model_minigpt():
 
 
 @pytest.mark.unit
-def test_sample_tokens_from_model_confidence_aware():
-    """Test sampling from ConfidenceAwareGPT model."""
-    model = MockConfidenceAwareGPT()
+def test_sample_tokens_from_model_doubt_aware():
+    """Test sampling from DoubtAwareGPT model."""
+    model = MockDoubtAwareGPT()
     tokenizer = MockTokenizer()
 
     # Test basic sampling
@@ -237,38 +237,38 @@ def test_sample_tokens_from_model_eos_stopping():
 
 
 @pytest.mark.unit
-def test_confidence_aware_gpt_forward_calls():
-    """Test that ConfidenceAwareGPT forward is called with correct confidence scalars."""
+def test_doubt_aware_gpt_forward_calls():
+    """Test that DoubtAwareGPT forward is called with correct doubt scalars."""
     # Create a mock model that tracks forward calls
     forward_calls = []
 
-    class TrackingConfidenceAwareGPT(nn.Module):
+    class TrackingDoubtAwareGPT(nn.Module):
         def __init__(self):
             super().__init__()
             self.vocab_size = 1000
             self.loss_predictor = nn.Linear(10, 1)
             self.max_seq_len = 10
 
-        def forward(self, input_ids, confidence_scalars=None):
+        def forward(self, input_ids, doubt_scalars=None):
             # Track the call
             forward_calls.append({
                 "input_ids_shape": input_ids.shape,
-                "confidence_scalars_shape": confidence_scalars.shape if confidence_scalars is not None else None,
-                "confidence_scalars_values": confidence_scalars.tolist() if confidence_scalars is not None else None,
+                "doubt_scalars_shape": doubt_scalars.shape if doubt_scalars is not None else None,
+                "doubt_scalars_values": doubt_scalars.tolist() if doubt_scalars is not None else None,
             })
 
             batch_size, seq_len = input_ids.shape
-            # Return increasing confidence predictions to verify they're used
+            # Return increasing doubt predictions to verify they're used
             return {
                 "logits": torch.randn(batch_size, seq_len, self.vocab_size),
                 "loss_prediction": torch.arange(seq_len, dtype=torch.float32).view(1, seq_len) * 0.1 + 0.5,
             }
 
-    model = TrackingConfidenceAwareGPT()
+    model = TrackingDoubtAwareGPT()
     tokenizer = MockTokenizer()
 
-    # Test with use_confidence=True
-    config = SamplingConfig(device="cpu", max_new_tokens=3, use_confidence=True)
+    # Test with use_doubt=True
+    config = SamplingConfig(device="cpu", max_new_tokens=3, use_doubt=True)
     text, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
@@ -279,23 +279,23 @@ def test_confidence_aware_gpt_forward_calls():
     # Verify forward calls were made
     assert len(forward_calls) == 3  # Should be called 3 times (once for each new token)
 
-    # Check first call: initial prompt (4 tokens) with no confidence scalars
+    # Check first call: initial prompt (4 tokens) with no doubt scalars
     first_call = forward_calls[0]
     assert first_call["input_ids_shape"] == (1, 4)  # Prompt tokens
-    assert first_call["confidence_scalars_shape"] is None  # First call should have None
+    assert first_call["doubt_scalars_shape"] is None  # First call should have None
 
     # Check second call: prompt + 1 generated token (5 tokens total)
     second_call = forward_calls[1]
     assert second_call["input_ids_shape"] == (1, 5)  # Prompt + 1 generated token
 
-    # Second call should have confidence scalars with shape [1, 5, 1]
+    # Second call should have doubt scalars with shape [1, 5, 1]
     # First position should be 0, subsequent positions should have loss predictions
-    assert second_call["confidence_scalars_shape"] == (1, 5, 1)
+    assert second_call["doubt_scalars_shape"] == (1, 5, 1)
 
     # Check third call: prompt + 2 generated tokens (6 tokens total)
     third_call = forward_calls[2]
     assert third_call["input_ids_shape"] == (1, 6)
-    assert third_call["confidence_scalars_shape"] == (1, 6, 1)
+    assert third_call["doubt_scalars_shape"] == (1, 6, 1)
 
     # Verify loss predictions were collected
     assert loss_predictions is not None
@@ -310,32 +310,32 @@ def test_confidence_aware_gpt_forward_calls():
 
 
 @pytest.mark.unit
-def test_confidence_aware_gpt_confidence_values():
-    """Test that confidence values are properly propagated through sampling."""
-    # Create a mock model that returns predictable confidence values
+def test_doubt_aware_gpt_doubt_values():
+    """Test that doubt values are properly propagated through sampling."""
+    # Create a mock model that returns predictable doubt values
     forward_calls = []
 
-    class PredictableConfidenceAwareGPT(nn.Module):
+    class PredictableDoubtAwareGPT(nn.Module):
         def __init__(self):
             super().__init__()
             self.vocab_size = 1000
             self.loss_predictor = nn.Linear(10, 1)
             self.max_seq_len = 10
 
-        def forward(self, input_ids, confidence_scalars=None):
+        def forward(self, input_ids, doubt_scalars=None):
             # Track the call with more detail
             call_info = {
                 "input_ids_shape": input_ids.shape,
-                "confidence_scalars": confidence_scalars,
+                "doubt_scalars": doubt_scalars,
             }
 
-            if confidence_scalars is not None:
-                call_info["confidence_scalars_shape"] = confidence_scalars.shape
-                call_info["confidence_scalars_values"] = confidence_scalars.tolist()
-                # Verify that confidence scalars are properly shifted
+            if doubt_scalars is not None:
+                call_info["doubt_scalars_shape"] = doubt_scalars.shape
+                call_info["doubt_scalars_values"] = doubt_scalars.tolist()
+                # Verify that doubt scalars are properly shifted
                 # Position 0 should always be 0
-                assert confidence_scalars[0, 0, 0].item() == 0.0, (
-                    f"Position 0 should be 0, got {confidence_scalars[0, 0, 0].item()}"
+                assert doubt_scalars[0, 0, 0].item() == 0.0, (
+                    f"Position 0 should be 0, got {doubt_scalars[0, 0, 0].item()}"
                 )
 
             forward_calls.append(call_info)
@@ -349,11 +349,11 @@ def test_confidence_aware_gpt_confidence_values():
                 "loss_prediction": loss_pred,
             }
 
-    model = PredictableConfidenceAwareGPT()
+    model = PredictableDoubtAwareGPT()
     tokenizer = MockTokenizer()
 
-    # Test with use_confidence=True
-    config = SamplingConfig(device="cpu", max_new_tokens=3, use_confidence=True)
+    # Test with use_doubt=True
+    config = SamplingConfig(device="cpu", max_new_tokens=3, use_doubt=True)
     text, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
@@ -372,15 +372,15 @@ def test_confidence_aware_gpt_confidence_values():
     # First generated token gets loss prediction from position 3: 0.8
     # Second generated token should get loss prediction from previous prediction
     # Let's trace through the logic:
-    # 1. First call: 4 tokens, confidence_scalars=None
+    # 1. First call: 4 tokens, doubt_scalars=None
     #    Returns loss_prediction = [0.5, 0.6, 0.7, 0.8]
     #    Stores last_conf = 0.8
-    #    Creates confidence_scalars for next call: [0, 0.5, 0.6, 0.7, 0] (5 positions)
-    # 2. Second call: 5 tokens, confidence_scalars = [0, 0.5, 0.6, 0.7, 0]
+    #    Creates doubt_scalars for next call: [0, 0.5, 0.6, 0.7, 0] (5 positions)
+    # 2. Second call: 5 tokens, doubt_scalars = [0, 0.5, 0.6, 0.7, 0]
     #    Returns loss_prediction = [0.5, 0.6, 0.7, 0.8, 0.9] (5 positions)
     #    Stores last_conf = 0.9
-    #    Creates confidence_scalars for next call: [0, 0.5, 0.6, 0.7, 0.8, 0] (6 positions)
-    # 3. Third call: 6 tokens, confidence_scalars = [0, 0.5, 0.6, 0.7, 0.8, 0]
+    #    Creates doubt_scalars for next call: [0, 0.5, 0.6, 0.7, 0.8, 0] (6 positions)
+    # 3. Third call: 6 tokens, doubt_scalars = [0, 0.5, 0.6, 0.7, 0.8, 0]
     #    Returns loss_prediction = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0] (6 positions)
     #    Stores last_conf = 1.0
 
@@ -392,9 +392,9 @@ def test_confidence_aware_gpt_confidence_values():
 
 
 @pytest.mark.unit
-def test_format_tokens_with_confidence():
-    """Test the format_tokens_with_confidence function."""
-    from dendritic.experiments.confidence.sampling_utils import format_tokens_with_confidence
+def test_format_tokens_with_doubt():
+    """Test the format_tokens_with_doubt function."""
+    from dendritic.experiments.doubt.sampling_utils import format_tokens_with_doubt
 
     tokenizer = MockTokenizer()
 
@@ -402,11 +402,11 @@ def test_format_tokens_with_confidence():
     generated_token_ids = [5, 6, 7]  # "was", "the", "day"
     loss_predictions = [8.5, 7.2, 6.8]
 
-    result = format_tokens_with_confidence(
+    result = format_tokens_with_doubt(
         tokenizer=tokenizer,
         generated_token_ids=generated_token_ids,
         loss_predictions=loss_predictions,
-        confidence_precision=1,
+        doubt_precision=1,
     )
 
     expected = "was(8.5) the(7.2) day(6.8)"
@@ -414,9 +414,9 @@ def test_format_tokens_with_confidence():
 
 
 @pytest.mark.unit
-def test_format_tokens_with_confidence_whitespace_stripping():
+def test_format_tokens_with_doubt_whitespace_stripping():
     """Test that whitespace is properly stripped from decoded tokens."""
-    from dendritic.experiments.confidence.sampling_utils import format_tokens_with_confidence
+    from dendritic.experiments.doubt.sampling_utils import format_tokens_with_doubt
 
     class WhitespaceTokenizer(MockTokenizer):
         def decode(self, tokens, skip_special_tokens=True):
@@ -429,11 +429,11 @@ def test_format_tokens_with_confidence_whitespace_stripping():
     generated_token_ids = [5, 6, 7]  # " was", " the", " day"
     loss_predictions = [8.5, 7.2, 6.8]
 
-    result = format_tokens_with_confidence(
+    result = format_tokens_with_doubt(
         tokenizer=tokenizer,
         generated_token_ids=generated_token_ids,
         loss_predictions=loss_predictions,
-        confidence_precision=1,
+        doubt_precision=1,
     )
 
     expected = "was(8.5) the(7.2) day(6.8)"  # Should be stripped of leading spaces
@@ -441,9 +441,9 @@ def test_format_tokens_with_confidence_whitespace_stripping():
 
 
 @pytest.mark.unit
-def test_format_tokens_with_confidence_validation():
-    """Test that format_tokens_with_confidence validates token count match."""
-    from dendritic.experiments.confidence.sampling_utils import format_tokens_with_confidence
+def test_format_tokens_with_doubt_validation():
+    """Test that format_tokens_with_doubt validates token count match."""
+    from dendritic.experiments.doubt.sampling_utils import format_tokens_with_doubt
 
     tokenizer = MockTokenizer()
 
@@ -452,7 +452,7 @@ def test_format_tokens_with_confidence_validation():
     loss_predictions = [8.5]  # 1 loss value
 
     with pytest.raises(ValueError, match="Token count .* doesn't match loss prediction count"):
-        format_tokens_with_confidence(
+        format_tokens_with_doubt(
             tokenizer=tokenizer,
             generated_token_ids=generated_token_ids,
             loss_predictions=loss_predictions,
@@ -460,30 +460,30 @@ def test_format_tokens_with_confidence_validation():
 
 
 @pytest.mark.unit
-def test_format_tokens_with_confidence_precision():
-    """Test different precision levels for confidence scores."""
-    from dendritic.experiments.confidence.sampling_utils import format_tokens_with_confidence
+def test_format_tokens_with_doubt_precision():
+    """Test different precision levels for doubt scores."""
+    from dendritic.experiments.doubt.sampling_utils import format_tokens_with_doubt
 
     tokenizer = MockTokenizer()
     generated_token_ids = [5, 6]
     loss_predictions = [8.56789, 7.23456]
 
     # Test 0 decimal places
-    result_0 = format_tokens_with_confidence(
+    result_0 = format_tokens_with_doubt(
         tokenizer=tokenizer,
         generated_token_ids=generated_token_ids,
         loss_predictions=loss_predictions,
-        confidence_precision=0,
+        doubt_precision=0,
     )
     expected_0 = "was(9) the(7)"
     assert result_0 == expected_0
 
     # Test 2 decimal places
-    result_2 = format_tokens_with_confidence(
+    result_2 = format_tokens_with_doubt(
         tokenizer=tokenizer,
         generated_token_ids=generated_token_ids,
         loss_predictions=loss_predictions,
-        confidence_precision=2,
+        doubt_precision=2,
     )
     expected_2 = "was(8.57) the(7.23)"
     assert result_2 == expected_2
@@ -492,7 +492,7 @@ def test_format_tokens_with_confidence_precision():
 @pytest.mark.unit
 def test_sample_tokens_from_model_returns_token_ids():
     """Test that sample_tokens_from_model returns token IDs correctly."""
-    from dendritic.experiments.confidence.sampling_utils import sample_tokens_from_model
+    from dendritic.experiments.doubt.sampling_utils import sample_tokens_from_model
 
     model = MockMiniGPT()
     tokenizer = MockTokenizer()
@@ -515,14 +515,14 @@ def test_sample_tokens_from_model_returns_token_ids():
 
 
 @pytest.mark.unit
-def test_sample_model_output_with_confidence_formatting():
-    """Test that sample_model_output returns formatted tokens when confidence is available."""
-    from dendritic.experiments.confidence.sampling_utils import sample_model_output
+def test_sample_model_output_with_doubt_formatting():
+    """Test that sample_model_output returns formatted tokens when doubt is available."""
+    from dendritic.experiments.doubt.sampling_utils import sample_model_output
 
-    model = MockConfidenceAwareGPT()
+    model = MockDoubtAwareGPT()
     tokenizer = MockTokenizer()
 
-    config = SamplingConfig(device="cpu", max_new_tokens=3, include_confidence_formatting=True)
+    config = SamplingConfig(device="cpu", max_new_tokens=3, include_doubt_formatting=True)
     generated, loss_predictions, formatted_tokens = sample_model_output(
         model=model,
         tokenizer=tokenizer,
@@ -543,13 +543,13 @@ def test_sample_model_output_with_confidence_formatting():
 @pytest.mark.unit
 def test_sample_model_output_backward_compatibility():
     """Test that sample_model_output maintains backward compatibility."""
-    from dendritic.experiments.confidence.sampling_utils import sample_model_output
+    from dendritic.experiments.doubt.sampling_utils import sample_model_output
 
     model = MockMiniGPT()
     tokenizer = MockTokenizer()
 
-    # Test without confidence formatting (old behavior)
-    config = SamplingConfig(device="cpu", max_new_tokens=3, include_confidence_formatting=False)
+    # Test without doubt formatting (old behavior)
+    config = SamplingConfig(device="cpu", max_new_tokens=3, include_doubt_formatting=False)
     generated, loss_predictions, formatted_tokens = sample_model_output(
         model=model,
         tokenizer=tokenizer,

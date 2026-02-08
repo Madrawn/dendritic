@@ -1,5 +1,5 @@
 """
-Configuration for confidence-aware GPT experiments.
+Configuration for doubt-aware GPT experiments.
 """
 
 from dataclasses import dataclass
@@ -9,20 +9,20 @@ from dendritic.experiments.utils.PretrainingConfig import (
 
 
 @dataclass
-class ConfidenceExperimentConfig(PretrainingConfig):
-    """Configuration for confidence-aware experiments.
+class DoubtExperimentConfig(PretrainingConfig):
+    """Configuration for doubt-aware experiments.
 
-    Extends PretrainingConfig with confidence-specific parameters for
+    Extends PretrainingConfig with doubt-specific parameters for
     two-pass lookahead training.
     """
 
-    # Confidence-specific parameters
-    confidence_alpha: float = 1.0  # Weight for confidence loss
+    # Doubt-specific parameters
+    doubt_alpha: float = 1.0  # Weight for doubt loss
     lookahead_steps: int = 2  # Number of steps to look ahead (fixed at 2 for now)
-    confidence_init_bias: float = 2.0  # Initial bias for confidence predictor
+    doubt_init_bias: float = 2.0  # Initial bias for doubt predictor
 
     # Experiment tracking
-    results_dir: str = "results/confidence_experiments"
+    results_dir: str = "results/doubt_experiments"
     save_interval: int = 100  # Save intermediate results every N steps
 
     # Token sampling configuration
@@ -38,4 +38,4 @@ class ConfidenceExperimentConfig(PretrainingConfig):
         """Initialize derived fields after dataclass initialization."""
         # Ensure results_dir is a string path
         if not self.results_dir:
-            self.results_dir = "results/confidence_experiments"
+            self.results_dir = "results/doubt_experiments"

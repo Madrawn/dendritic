@@ -1,12 +1,12 @@
 """
-Unit tests for ConfidenceExperimentConfig.
+Unit tests for DoubtExperimentConfig.
 """
 
 import pytest
 import json
 from dataclasses import asdict
 
-from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
+from dendritic.experiments.doubt.config import DoubtExperimentConfig
 from dendritic.experiments.utils.PretrainingConfig import (
     PretrainingConfig,
     CohortSchedulerConfig,
@@ -15,14 +15,14 @@ from dendritic.experiments.utils.PretrainingConfig import (
 
 @pytest.mark.unit
 def test_config_instantiation_defaults():
-    """Test that ConfidenceExperimentConfig can be instantiated with default values."""
-    config = ConfidenceExperimentConfig()
+    """Test that DoubtExperimentConfig can be instantiated with default values."""
+    config = DoubtExperimentConfig()
 
     # Check that default values are set
-    assert config.confidence_alpha == 1.0
+    assert config.doubt_alpha == 1.0
     assert config.lookahead_steps == 2
-    assert config.confidence_init_bias == 2.0
-    assert config.results_dir == "results/confidence_experiments"
+    assert config.doubt_init_bias == 2.0
+    assert config.results_dir == "results/doubt_experiments"
     assert config.save_interval == 100
 
     # Check that parent class defaults are inherited
@@ -34,11 +34,11 @@ def test_config_instantiation_defaults():
 
 @pytest.mark.unit
 def test_config_custom_values():
-    """Test that ConfidenceExperimentConfig accepts custom values."""
-    config = ConfidenceExperimentConfig(
-        confidence_alpha=0.5,
+    """Test that DoubtExperimentConfig accepts custom values."""
+    config = DoubtExperimentConfig(
+        doubt_alpha=0.5,
         lookahead_steps=3,
-        confidence_init_bias=1.5,
+        doubt_init_bias=1.5,
         results_dir="custom/results",
         save_interval=50,
         vocab_size=10000,
@@ -47,9 +47,9 @@ def test_config_custom_values():
         dataset="wikitext",
     )
 
-    assert config.confidence_alpha == 0.5
+    assert config.doubt_alpha == 0.5
     assert config.lookahead_steps == 3
-    assert config.confidence_init_bias == 1.5
+    assert config.doubt_init_bias == 1.5
     assert config.results_dir == "custom/results"
     assert config.save_interval == 50
     assert config.vocab_size == 10000
@@ -60,15 +60,15 @@ def test_config_custom_values():
 
 @pytest.mark.unit
 def test_config_inheritance():
-    """Test that ConfidenceExperimentConfig properly inherits from PretrainingConfig."""
-    config = ConfidenceExperimentConfig()
+    """Test that DoubtExperimentConfig properly inherits from PretrainingConfig."""
+    config = DoubtExperimentConfig()
 
     # Check isinstance
     assert isinstance(config, PretrainingConfig)
 
     # Check that all parent fields are accessible
     parent_fields = {field.name for field in PretrainingConfig.__dataclass_fields__.values()}
-    child_fields = {field.name for field in ConfidenceExperimentConfig.__dataclass_fields__.values()}
+    child_fields = {field.name for field in DoubtExperimentConfig.__dataclass_fields__.values()}
 
     # All parent fields should be in child fields
     assert parent_fields.issubset(child_fields)
@@ -76,9 +76,9 @@ def test_config_inheritance():
     # Child should have additional fields
     additional_fields = child_fields - parent_fields
     expected_additional = {
-        "confidence_alpha",
+        "doubt_alpha",
         "lookahead_steps",
-        "confidence_init_bias",
+        "doubt_init_bias",
         "results_dir",
         "save_interval",
         "sampling_top_p",
@@ -94,25 +94,25 @@ def test_config_inheritance():
 def test_config_post_init():
     """Test that __post_init__ sets default results_dir if empty."""
     # Test with empty results_dir
-    config = ConfidenceExperimentConfig(results_dir="")
-    assert config.results_dir == "results/confidence_experiments"
+    config = DoubtExperimentConfig(results_dir="")
+    assert config.results_dir == "results/doubt_experiments"
 
     # Test with non-empty results_dir
-    config = ConfidenceExperimentConfig(results_dir="my/results")
+    config = DoubtExperimentConfig(results_dir="my/results")
     assert config.results_dir == "my/results"
 
     # Test that parent __post_init__ is called
-    config = ConfidenceExperimentConfig()
+    config = DoubtExperimentConfig()
     assert config.eval_interval == max(config.training_steps // config.training_steps_factor, 1)
 
 
 @pytest.mark.unit
 def test_config_serialization():
-    """Test that ConfidenceExperimentConfig can be serialized to JSON."""
-    config = ConfidenceExperimentConfig(
-        confidence_alpha=0.7,
+    """Test that DoubtExperimentConfig can be serialized to JSON."""
+    config = DoubtExperimentConfig(
+        doubt_alpha=0.7,
         lookahead_steps=2,
-        confidence_init_bias=1.8,
+        doubt_init_bias=1.8,
         results_dir="test/results",
         save_interval=200,
     )
@@ -122,9 +122,9 @@ def test_config_serialization():
 
     # Check that all fields are present and have correct types
     assert isinstance(config_dict, dict)
-    assert config_dict["confidence_alpha"] == 0.7
+    assert config_dict["doubt_alpha"] == 0.7
     assert config_dict["lookahead_steps"] == 2
-    assert config_dict["confidence_init_bias"] == 1.8
+    assert config_dict["doubt_init_bias"] == 1.8
     assert config_dict["results_dir"] == "test/results"
     assert config_dict["save_interval"] == 200
 
@@ -134,14 +134,14 @@ def test_config_serialization():
 
     # Parse back
     parsed_dict = json.loads(json_str)
-    assert parsed_dict["confidence_alpha"] == 0.7
+    assert parsed_dict["doubt_alpha"] == 0.7
 
 
 @pytest.mark.unit
 def test_config_cohort_scheduler():
     """Test that cohort_scheduler field works correctly."""
     # Test with None (default)
-    config = ConfidenceExperimentConfig()
+    config = DoubtExperimentConfig()
     assert config.cohort_scheduler is None
 
     # Test with CohortSchedulerConfig
@@ -152,7 +152,7 @@ def test_config_cohort_scheduler():
         device="cuda",
         apply_to_gradients=False,
     )
-    config = ConfidenceExperimentConfig(cohort_scheduler=cohort_config)
+    config = DoubtExperimentConfig(cohort_scheduler=cohort_config)
     assert config.cohort_scheduler is not None
     assert config.cohort_scheduler.min_mult == 0.3
     assert config.cohort_scheduler.max_mult == 1.2
@@ -163,33 +163,33 @@ def test_config_cohort_scheduler():
 
 @pytest.mark.unit
 def test_config_validation():
-    """Test that confidence-specific parameters accept various values."""
+    """Test that doubt-specific parameters accept various values."""
     # Test that lookahead_steps accepts zero (no validation currently)
-    config = ConfidenceExperimentConfig(lookahead_steps=0)
+    config = DoubtExperimentConfig(lookahead_steps=0)
     assert config.lookahead_steps == 0
 
     # Test that lookahead_steps accepts negative values (no validation currently)
-    config = ConfidenceExperimentConfig(lookahead_steps=-1)
+    config = DoubtExperimentConfig(lookahead_steps=-1)
     assert config.lookahead_steps == -1
 
-    # Test that confidence_alpha can be zero
-    config = ConfidenceExperimentConfig(confidence_alpha=0.0)
-    assert config.confidence_alpha == 0.0
+    # Test that doubt_alpha can be zero
+    config = DoubtExperimentConfig(doubt_alpha=0.0)
+    assert config.doubt_alpha == 0.0
 
-    # Test negative confidence_alpha (should be allowed, though unusual)
-    config = ConfidenceExperimentConfig(confidence_alpha=-0.5)
-    assert config.confidence_alpha == -0.5
+    # Test negative doubt_alpha (should be allowed, though unusual)
+    config = DoubtExperimentConfig(doubt_alpha=-0.5)
+    assert config.doubt_alpha == -0.5
 
 
 @pytest.mark.unit
 def test_config_field_types():
     """Test that field types are correct."""
-    config = ConfidenceExperimentConfig()
+    config = DoubtExperimentConfig()
 
-    # Check types of confidence-specific fields
-    assert isinstance(config.confidence_alpha, float)
+    # Check types of doubt-specific fields
+    assert isinstance(config.doubt_alpha, float)
     assert isinstance(config.lookahead_steps, int)
-    assert isinstance(config.confidence_init_bias, float)
+    assert isinstance(config.doubt_init_bias, float)
     assert isinstance(config.results_dir, str)
     assert isinstance(config.save_interval, int)
 

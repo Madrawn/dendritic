@@ -1,5 +1,5 @@
 from dendritic.experiments.utils.TrainingResult import TrainingResult
-from dendritic.experiments.confidence.TrainingStrategy import TrainingStrategy
+from dendritic.experiments.doubt.TrainingStrategy import TrainingStrategy
 from dendritic.experiments.utils.loss_utils import (
     compute_sequence_language_modeling_loss,
 )

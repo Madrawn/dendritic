@@ -1,5 +1,5 @@
 """
-Results data structures and serialization for confidence-aware experiments.
+Results data structures and serialization for doubt-aware experiments.
 
 This module defines the dataclasses for storing experiment results and provides
 serialization/deserialization utilities for saving and loading results.
@@ -14,26 +14,26 @@ from typing import Dict, List, Any, Optional
 import numpy as np
 
 from dendritic.experiments.utils.TrainingResult import TrainingResult
-from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
+from dendritic.experiments.doubt.config import DoubtExperimentConfig
 
 
 @dataclass
-class ConfidenceTrainingResult(TrainingResult):
+class DoubtTrainingResult(TrainingResult):
     """Extended training results with loss prediction metrics."""
 
-    confidence_loss_history: List[float] = field(default_factory=list)  # Kept for backward compatibility
+    doubt_loss_history: List[float] = field(default_factory=list)
     token_loss_history: List[float] = field(default_factory=list)
     loss_predictions: List[float] = field(default_factory=list)
     actual_future_losses: List[float] = field(default_factory=list)
 
 
 @dataclass
-class ConfidenceExperimentResults:
-    """Results from a confidence-aware experiment."""
+class DoubtExperimentResults:
+    """Results from a doubt-aware experiment."""
 
     standard_model_results: Dict[str, List[TrainingResult]]  # By seed
-    confidence_model_results: Dict[str, List[ConfidenceTrainingResult]]  # By seed
-    config: ConfidenceExperimentConfig
+    doubt_model_results: Dict[str, List[DoubtTrainingResult]]  # By seed
+    config: DoubtExperimentConfig
     timestamp: str
     training_time: Dict[str, float]  # Training time per model type
     parameter_counts: Dict[str, int] = field(default_factory=dict)
@@ -50,11 +50,11 @@ class ConfidenceExperimentResults:
         return _convert_to_serializable(result_dict)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ConfidenceExperimentResults":
-        """Create ConfidenceExperimentResults from a dictionary."""
-        # Convert config dict back to ConfidenceExperimentConfig
+    def from_dict(cls, data: Dict[str, Any]) -> "DoubtExperimentResults":
+        """Create DoubtExperimentResults from a dictionary."""
+        # Convert config dict back to DoubtExperimentConfig
         config_dict = data.get("config", {})
-        config = ConfidenceExperimentConfig(**config_dict)
+        config = DoubtExperimentConfig(**config_dict)
 
         # Reconstruct standard model results
         standard_results = {}
@@ -63,17 +63,17 @@ class ConfidenceExperimentResults:
                 TrainingResult(**result) if isinstance(result, dict) else result for result in result_list
             ]
 
-        # Reconstruct confidence model results
-        confidence_results = {}
-        for seed, result_list in data.get("confidence_model_results", {}).items():
-            confidence_results[seed] = [
-                (ConfidenceTrainingResult(**result) if isinstance(result, dict) else result) for result in result_list
+        # Reconstruct doubt model results
+        doubt_results = {}
+        for seed, result_list in data.get("doubt_model_results", {}).items():
+            doubt_results[seed] = [
+                (DoubtTrainingResult(**result) if isinstance(result, dict) else result) for result in result_list
             ]
 
         # Reconstruct results
         return cls(
             standard_model_results=standard_results,
-            confidence_model_results=confidence_results,
+            doubt_model_results=doubt_results,
             config=config,
             timestamp=data.get("timestamp", ""),
             training_time=data.get("training_time", {}),
@@ -82,11 +82,11 @@ class ConfidenceExperimentResults:
 
 
 # Backward compatibility alias
-ConfidenceTrainingResultWithPredictions = ConfidenceTrainingResult
+DoubtTrainingResultWithPredictions = DoubtTrainingResult
 
 
 def save_results(
-    results: ConfidenceExperimentResults,
+    results: DoubtExperimentResults,
     results_dir: Path,
     filename: Optional[str] = None,
 ) -> Path:
@@ -121,7 +121,7 @@ def save_results(
     return save_path
 
 
-def load_results(filepath: Path) -> ConfidenceExperimentResults:
+def load_results(filepath: Path) -> DoubtExperimentResults:
     """
     Load experiment results from JSON file.
 
@@ -129,12 +129,12 @@ def load_results(filepath: Path) -> ConfidenceExperimentResults:
         filepath: Path to JSON file containing results
 
     Returns:
-        Loaded ConfidenceExperimentResults
+        Loaded DoubtExperimentResults
     """
     with open(filepath, "r") as f:
         data = json.load(f)
 
-    return ConfidenceExperimentResults.from_dict(data)
+    return DoubtExperimentResults.from_dict(data)
 
 
 def _convert_to_serializable(obj: Any) -> Any:
@@ -171,7 +171,7 @@ def _convert_to_serializable(obj: Any) -> Any:
         return obj
 
 
-def create_results_filename(prefix: str = "confidence") -> str:
+def create_results_filename(prefix: str = "doubt") -> str:
     """
     Create a standardized filename for results.
 

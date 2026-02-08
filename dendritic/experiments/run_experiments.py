@@ -6,7 +6,7 @@ Usage:
     python -m dendritic.experiments.run_experiments --experiment pretraining
     python -m dendritic.experiments.run_experiments --experiment finetuning
     python -m dendritic.experiments.run_experiments --experiment both
-    python -m dendritic.experiments.run_experiments --experiment confidence
+    python -m dendritic.experiments.run_experiments --experiment doubt
 """
 
 # Standard library imports
@@ -164,7 +164,7 @@ def setup_windows_compiler():
         print("Could not locate cl.exe.")
 
 
-# Confidence experiment imports - imported conditionally inside confidence experiment
+# Doubt experiment imports - imported conditionally inside doubt experiment
 # block to avoid circular imports
 
 # Environment configuration
@@ -313,7 +313,7 @@ def main() -> None:
     parser.add_argument(
         "--experiment",
         type=str,
-        choices=["pretraining", "finetuning", "both", "confidence"],
+        choices=["pretraining", "finetuning", "both", "doubt"],
         default="both",
         help="Which experiment to run",
     )
@@ -381,15 +381,15 @@ def main() -> None:
         logger.info("=" * 70)
         run_finetuning_experiment_wrapper(args.device, args.num_workers)
 
-    if args.experiment == "confidence":
+    if args.experiment == "doubt":
         # Import here to avoid circular imports
-        from dendritic.experiments.confidence.config import ConfidenceExperimentConfig
-        from dendritic.experiments.confidence.experiment import (
-            ConfidenceAwareExperiment,
+        from dendritic.experiments.doubt.config import DoubtExperimentConfig
+        from dendritic.experiments.doubt.experiment import (
+            DoubtAwareExperiment,
         )
 
         logger.info("\n" + "=" * 70)
-        logger.info("RUNNING CONFIDENCE-AWARE EXPERIMENT")
+        logger.info("RUNNING DOUBT-AWARE EXPERIMENT")
         logger.info("=" * 70)
         # Create tokenizer (same as other experiments)
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -399,7 +399,7 @@ def main() -> None:
         NUM_HEADS = 6
         HEAD_DIM = 100
         BATCH_SIZE = 5
-        config = ConfidenceExperimentConfig(
+        config = DoubtExperimentConfig(
             # Reasonable for PoC
             training_steps=math.floor(55000 / BATCH_SIZE**2) * BATCH_SIZE,
             seeds=[42],
@@ -412,7 +412,7 @@ def main() -> None:
             eval_smoothing_factor=0.33,
             dropout=0.0,
             scheduler_type="no",
-            results_dir="results/confidence_experiments",
+            results_dir="results/doubt_experiments",
             dataset="tinystories",
             do_compile=True,
             min_eval_improvement=0.0,
@@ -431,9 +431,9 @@ def main() -> None:
         )
 
         # Run the experiment
-        experiment = ConfidenceAwareExperiment(config)
+        experiment = DoubtAwareExperiment(config)
         experiment.run(tokenizer)
-        logger.info(f"Confidence experiment completed. Results saved to {config.results_dir}")
+        logger.info(f"Doubt experiment completed. Results saved to {config.results_dir}")
 
     logger.info("\nAll experiments complete!")
 
