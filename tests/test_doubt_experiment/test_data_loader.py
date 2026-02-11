@@ -156,8 +156,6 @@ def doubt_config():
         training_steps=100,
         eval_split_ratio=0.1,
         doubt_alpha=1.0,
-        lookahead_steps=2,
-        doubt_init_bias=2.0,
     )
 
 

@@ -1,16 +1,19 @@
+from dendritic.experiments.models.doubt_conditioning.SelfConditionedGPT import SelfConditionedGPT
+from dendritic.experiments.models.doubt_conditioning.DoubtAwareGPT import DoubtAwareGPT
 from dendritic.experiments.utils.TrainingResult import TrainingResult
 from dendritic.experiments.doubt.TrainingStrategy import TrainingStrategy
 from dendritic.experiments.utils.loss_utils import (
     compute_sequence_language_modeling_loss,
 )
 
+import tqdm
 
 import numpy as np
 import torch
 import torch.nn as nn
 
 
-from typing import Any
+from typing import Any, cast
 
 
 class StandardTrainingStrategy(TrainingStrategy):
@@ -83,7 +86,25 @@ class StandardTrainingStrategy(TrainingStrategy):
 
         # Forward pass (model no longer computes loss internally)
         logits = model(input_ids)
+        # if hasattr(model, "core") and hasattr(model.core, "loss_predictor"):
+        # Use forward_with_diagnostics to get everything at once
+        # model = cast(SelfConditionedGPT, model)
+        # diagnostics = model.forward_with_diagnostics(input_ids)
+        # logits_with_doubt = diagnostics["logits"]
+        # logits_pass1 = diagnostics["pass1_logits"]
+        # doubt_signal = diagnostics["doubt_signal"]
 
+        # tqdm.tqdm.write(
+        #     f"Logit difference (pass1 vs pass2): {str((logits_pass1 - logits_with_doubt).abs().mean())}"
+        # )
+        # tqdm.tqdm.write(
+        #     (
+        #         "Doubt signal stats - mean: "
+        #         + str(doubt_signal.mean().item())
+        #         + " std: "
+        #         + str(doubt_signal.std().item())
+        #     )
+        # )
         # Compute loss externally (no shifting since seq_labels already aligned)
         loss = compute_sequence_language_modeling_loss(logits, seq_labels, reduction="mean")
 

@@ -1,4 +1,4 @@
-from dendritic.experiments.models.DoubtAwareGPT import DoubtAwareGPT
+from dendritic.experiments.models.doubt_conditioning.DoubtAwareGPT import DoubtAwareGPT
 from dendritic.experiments.models.ModelConfig import ModelConfig
 
 
@@ -7,7 +7,7 @@ from torch import nn
 
 
 class SelfConditionedGPT(nn.Module):
-    def __init__(self, config: ModelConfig, bound_fn: str = "tanh", take_meta: int = 3):
+    def __init__(self, config: ModelConfig, bound_fn: str = "none", take_meta: int = 3):
         super().__init__()
         self.core = DoubtAwareGPT(config=config, take_meta=take_meta)
         self.max_seq_len = config.max_seq_len
@@ -19,7 +19,8 @@ class SelfConditionedGPT(nn.Module):
 
         # Pass 1: Generate conditioning signal
         pass1_out = self.core(input_ids, doubt_scalars=None)
-        doubt_signal = self.bound(pass1_out["loss_prediction"]).unsqueeze(-1)
+        # loss_prediction shape: [B, T, V]; apply bound element-wise to get doubt_signal of same shape
+        doubt_signal = self.bound(pass1_out["loss_prediction"])
 
         # Pass 2: Conditioned prediction
         return self.core(input_ids, doubt_scalars=doubt_signal)["logits"]
@@ -27,12 +28,12 @@ class SelfConditionedGPT(nn.Module):
     def forward_with_diagnostics(self, input_ids: torch.Tensor) -> dict[str, torch.Tensor]:
         """For analysis: returns both passes' outputs."""
         pass1_out = self.core(input_ids, doubt_scalars=None)
-        doubt_signal = self.bound(pass1_out["loss_prediction"]).unsqueeze(-1)
+        doubt_signal = self.bound(pass1_out["loss_prediction"])
         pass2_out = self.core(input_ids, doubt_scalars=doubt_signal)
 
         return {
             "logits": pass2_out["logits"],
-            "doubt_signal": doubt_signal.squeeze(-1),
+            "doubt_signal": doubt_signal,  # shape [B, T, V]
             "pass1_logits": pass1_out["logits"],
         }
 

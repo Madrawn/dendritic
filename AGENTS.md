@@ -44,7 +44,7 @@ This file provides guidance to AI Agents when working with code in this reposito
     - `run_experiments.py`: Main experiment runner supporting pretraining, finetuning, and doubt experiments
     - Config-driven with dataclass-based configs (`PretrainingConfig`, `FinetuningConfig`, `DoubtExperimentConfig`)
     - Multi-seed experiments (default 5 seeds) for statistical significance
-    - **Doubt-aware experiments**: Compare DoubtAwareGPT (two-pass lookahead) vs standard MiniGPT
+    - **Doubt-aware experiments**: Compare DoubtAwareGPT vs standard MiniGPT
 
 4. **Dataset Handlers** (`dendritic/dataset_handlers/`): Factory pattern for dataset loading
    - `BaseDatasetHandler`: Abstract base class

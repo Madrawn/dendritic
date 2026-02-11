@@ -16,8 +16,8 @@ from dendritic.experiments.doubt.sampling_utils import (
     sample_model_output,
     SamplingConfig,
 )
-from dendritic.experiments.models.SelfConditionedGPT import SelfConditionedGPT
-from dendritic.experiments.models.DoubtAwareGPT import DoubtAwareGPT
+from dendritic.experiments.models.doubt_conditioning.SelfConditionedGPT import SelfConditionedGPT
+from dendritic.experiments.models.doubt_conditioning.DoubtAwareGPT import DoubtAwareGPT
 from dendritic.experiments.models.ModelConfig import ModelConfig
 
 
@@ -109,7 +109,7 @@ def test_self_conditioned_model_initialization(self_conditioned_model):
 
 @pytest.mark.unit
 def test_self_conditioned_model_forward_without_doubt(self_conditioned_model):
-    """Test forward pass without doubt_scalars (two-pass internal)."""
+    """Test forward pass without doubt_scalars (internal)."""
     batch_size = 2
     seq_len = 8
     input_ids = torch.randint(0, 1000, (batch_size, seq_len))
@@ -150,7 +150,8 @@ def test_self_conditioned_model_forward_with_diagnostics(self_conditioned_model)
     assert "doubt_signal" in output
     assert "pass1_logits" in output
     assert output["logits"].shape == (batch_size, seq_len, 1000)
-    assert output["doubt_signal"].shape == (batch_size, seq_len)
+    # doubt_signal shape is [B, T, V] with V=1 by default
+    assert output["doubt_signal"].shape == (batch_size, seq_len, 1)
     assert output["pass1_logits"].shape == (batch_size, seq_len, 1000)
 
 
@@ -180,7 +181,7 @@ def test_sample_tokens_from_model_self_conditioned(self_conditioned_model, minim
 
     # Test basic sampling
     config = SamplingConfig(device="cpu", max_new_tokens=5)
-    text, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
+    text, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=self_conditioned_model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -190,7 +191,6 @@ def test_sample_tokens_from_model_self_conditioned(self_conditioned_model, minim
     assert isinstance(text, str)
     assert "Once" in text  # Should contain the decoded prompt tokens
     # SelfConditionedGPT is not detected as doubt model, so no loss predictions
-    assert loss_predictions is None
     assert isinstance(generated_token_ids, list)
     assert len(generated_token_ids) == 5
     assert isinstance(full_token_ids, list)
@@ -217,7 +217,7 @@ def test_sample_tokens_from_model_self_conditioned_eos_stopping(self_conditioned
 
     try:
         config = SamplingConfig(device="cpu", max_new_tokens=10)
-        text, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
+        text, generated_token_ids, full_token_ids = sample_tokens_from_model(
             model=self_conditioned_model,
             tokenizer=tokenizer,
             prompt="Test prompt",
@@ -236,7 +236,7 @@ def test_sample_model_output_self_conditioned(self_conditioned_model):
     tokenizer = MockTokenizer()
 
     config = SamplingConfig(device="cpu", max_new_tokens=3, include_doubt_formatting=True)
-    generated, loss_predictions, formatted_tokens = sample_model_output(
+    generated = sample_model_output(
         model=self_conditioned_model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -244,10 +244,6 @@ def test_sample_model_output_self_conditioned(self_conditioned_model):
     )
 
     assert isinstance(generated, str)
-    # SelfConditionedGPT doesn't expose loss predictions, so they should be None
-    assert loss_predictions is None
-    # No doubt formatting for non-doubt model
-    assert formatted_tokens is None
 
 
 @pytest.mark.unit
@@ -289,7 +285,7 @@ def test_self_conditioned_model_bound_function_applied(minimal_config):
 
 @pytest.mark.unit
 def test_self_conditioned_diagnostics_consistency(minimal_config):
-    """Test that forward_with_diagnostics returns values consistent with manual two-pass."""
+    """Test that forward_with_diagnostics returns values consistent with manual."""
     model = SelfConditionedGPT(config=minimal_config, bound_fn="tanh", take_meta=2)
     model.eval()  # Ensure deterministic behavior (no dropout)
     input_ids = torch.randint(0, 1000, (2, 8))
@@ -297,10 +293,10 @@ def test_self_conditioned_diagnostics_consistency(minimal_config):
     # Get diagnostics
     diag = model.forward_with_diagnostics(input_ids)
 
-    # Manually compute two-pass
+    # Manually compute
     pass1_out = model.core(input_ids, doubt_scalars=None)
     expected_doubt_signal = model.bound(pass1_out["loss_prediction"])
-    expected_logits = model.core(input_ids, doubt_scalars=expected_doubt_signal.unsqueeze(-1))["logits"]
+    expected_logits = model.core(input_ids, doubt_scalars=expected_doubt_signal)["logits"]
 
     assert torch.allclose(diag["doubt_signal"], expected_doubt_signal, atol=1e-5)
     assert torch.allclose(diag["logits"], expected_logits, atol=1e-5)
@@ -317,7 +313,7 @@ def test_self_conditioned_model_different_bound_fns(minimal_config):
         tokenizer = MockTokenizer()
 
         config = SamplingConfig(device="cpu", max_new_tokens=3)
-        text, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
+        text, generated_token_ids, full_token_ids = sample_tokens_from_model(
             model=model,
             tokenizer=tokenizer,
             prompt="Test prompt",
@@ -325,7 +321,6 @@ def test_self_conditioned_model_different_bound_fns(minimal_config):
         )
 
         assert isinstance(text, str)
-        assert loss_predictions is None
 
 
 @pytest.mark.unit
@@ -339,7 +334,7 @@ def test_self_conditioned_model_max_seq_len_respecting(minimal_config):
 
     # Prompt will be 4 tokens, so we can only generate 6 more before hitting limit
     config_sampling = SamplingConfig(device="cpu", max_new_tokens=10)
-    text, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
+    text, generated_token_ids, full_token_ids = sample_tokens_from_model(
         model=model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -360,7 +355,7 @@ def test_self_conditioned_vs_doubt_aware_parameter_count(minimal_config):
     sc_params = sum(p.numel() for p in sc_model.parameters())
 
     # SelfConditionedGPT wraps a DoubtAwareGPT core, so it should have the same parameters
-    # (the two-pass uses the same core weights twice)
+    # (the uses the same core weights twice)
     assert sc_params == doubt_params
 
 
@@ -391,7 +386,7 @@ def test_sample_tokens_temperature_effect(self_conditioned_model):
 
     # Use low temperature for more deterministic sampling
     config_low = SamplingConfig(device="cpu", max_new_tokens=5, temperature=0.1)
-    text_low, _, _, _ = sample_tokens_from_model(
+    text_low, generated_token_ids_low, full_token_ids_low = sample_tokens_from_model(
         model=self_conditioned_model,
         tokenizer=tokenizer,
         prompt="Test prompt",
@@ -400,7 +395,7 @@ def test_sample_tokens_temperature_effect(self_conditioned_model):
 
     # Use high temperature
     config_high = SamplingConfig(device="cpu", max_new_tokens=5, temperature=2.0)
-    text_high, _, _, _ = sample_tokens_from_model(
+    text_high, generated_token_ids_high, full_token_ids_high = sample_tokens_from_model(
         model=self_conditioned_model,
         tokenizer=tokenizer,
         prompt="Test prompt",

@@ -20,8 +20,6 @@ def test_config_instantiation_defaults():
 
     # Check that default values are set
     assert config.doubt_alpha == 1.0
-    assert config.lookahead_steps == 2
-    assert config.doubt_init_bias == 2.0
     assert config.results_dir == "results/doubt_experiments"
     assert config.save_interval == 100
 
@@ -37,8 +35,6 @@ def test_config_custom_values():
     """Test that DoubtExperimentConfig accepts custom values."""
     config = DoubtExperimentConfig(
         doubt_alpha=0.5,
-        lookahead_steps=3,
-        doubt_init_bias=1.5,
         results_dir="custom/results",
         save_interval=50,
         vocab_size=10000,
@@ -48,8 +44,6 @@ def test_config_custom_values():
     )
 
     assert config.doubt_alpha == 0.5
-    assert config.lookahead_steps == 3
-    assert config.doubt_init_bias == 1.5
     assert config.results_dir == "custom/results"
     assert config.save_interval == 50
     assert config.vocab_size == 10000
@@ -77,8 +71,6 @@ def test_config_inheritance():
     additional_fields = child_fields - parent_fields
     expected_additional = {
         "doubt_alpha",
-        "lookahead_steps",
-        "doubt_init_bias",
         "results_dir",
         "save_interval",
         "sampling_top_p",
@@ -86,6 +78,7 @@ def test_config_inheritance():
         "sampling_max_tokens",
         "sampling_temperature",
         "eval_smoothing_factor",
+        "doubt_vector_dim",
     }
     assert additional_fields == expected_additional
 
@@ -111,8 +104,6 @@ def test_config_serialization():
     """Test that DoubtExperimentConfig can be serialized to JSON."""
     config = DoubtExperimentConfig(
         doubt_alpha=0.7,
-        lookahead_steps=2,
-        doubt_init_bias=1.8,
         results_dir="test/results",
         save_interval=200,
     )
@@ -123,8 +114,6 @@ def test_config_serialization():
     # Check that all fields are present and have correct types
     assert isinstance(config_dict, dict)
     assert config_dict["doubt_alpha"] == 0.7
-    assert config_dict["lookahead_steps"] == 2
-    assert config_dict["doubt_init_bias"] == 1.8
     assert config_dict["results_dir"] == "test/results"
     assert config_dict["save_interval"] == 200
 
@@ -164,14 +153,6 @@ def test_config_cohort_scheduler():
 @pytest.mark.unit
 def test_config_validation():
     """Test that doubt-specific parameters accept various values."""
-    # Test that lookahead_steps accepts zero (no validation currently)
-    config = DoubtExperimentConfig(lookahead_steps=0)
-    assert config.lookahead_steps == 0
-
-    # Test that lookahead_steps accepts negative values (no validation currently)
-    config = DoubtExperimentConfig(lookahead_steps=-1)
-    assert config.lookahead_steps == -1
-
     # Test that doubt_alpha can be zero
     config = DoubtExperimentConfig(doubt_alpha=0.0)
     assert config.doubt_alpha == 0.0
@@ -179,6 +160,10 @@ def test_config_validation():
     # Test negative doubt_alpha (should be allowed, though unusual)
     config = DoubtExperimentConfig(doubt_alpha=-0.5)
     assert config.doubt_alpha == -0.5
+
+    # Test doubt_vector_dim can be > 1 for vectorized doubt
+    config = DoubtExperimentConfig(doubt_vector_dim=4)
+    assert config.doubt_vector_dim == 4
 
 
 @pytest.mark.unit
@@ -188,8 +173,7 @@ def test_config_field_types():
 
     # Check types of doubt-specific fields
     assert isinstance(config.doubt_alpha, float)
-    assert isinstance(config.lookahead_steps, int)
-    assert isinstance(config.doubt_init_bias, float)
+    assert isinstance(config.doubt_vector_dim, int)
     assert isinstance(config.results_dir, str)
     assert isinstance(config.save_interval, int)
 

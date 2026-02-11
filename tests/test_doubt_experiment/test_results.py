@@ -249,7 +249,7 @@ class TestDoubtExperimentResults:
                 "training_steps": 10,
                 "seeds": [42, 43],
                 "doubt_alpha": 1.0,
-                "lookahead_steps": 2,
+                "doubt_vector_dim": 1,
                 "results_dir": "results/doubt_experiments",
             },
             "timestamp": "2024-01-01_12:00:00",

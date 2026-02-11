@@ -1,7 +1,9 @@
 from typing import Any
 
+from dendritic.layers import norm
 
-from .BaselineMLP import BaselineMLP
+
+from .BaselineMLP import SwiGLUMLP
 from .DendriticPretrainingMLP import DendriticPretrainingMLP
 from .TransformerBlock import TransformerBlock
 from .ModelConfig import ModelConfig
@@ -9,6 +11,23 @@ from .ModelConfig import ModelConfig
 
 import torch
 from torch import nn
+
+
+class CastedLinear(nn.Module):
+    def __init__(self, in_features, out_features, bias=True):
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.bias = nn.Parameter(torch.empty(out_features)) if bias else None
+
+        # Uniform init with sqrt(3) multiplier
+        s = 3**0.5 * in_features**-0.5
+        with torch.no_grad():
+            self.weight.uniform_(-s, s)
+            if self.bias is not None:
+                self.bias.uniform_(-s, s)
+
+    def forward(self, x):
+        return torch.nn.functional.linear(x, self.weight, self.bias)
 
 
 class BaseGPT(nn.Module):
@@ -33,7 +52,7 @@ class BaseGPT(nn.Module):
         self.blocks = nn.ModuleList()
         for _ in range(self.num_layers):
             if config.mlp_type == "standard":
-                mlp = BaselineMLP(config.embed_dim, config.hidden_dim, config.dropout)
+                mlp = SwiGLUMLP(config.embed_dim, config.hidden_dim, config.dropout)
             elif config.mlp_type == "dendritic":
                 mlp = DendriticPretrainingMLP(
                     embed_dim=config.embed_dim,
@@ -49,7 +68,6 @@ class BaseGPT(nn.Module):
             self.blocks.append(block)
 
         # Output
-        self.ln_f = nn.LayerNorm(config.embed_dim)
         self.head = nn.Linear(config.embed_dim, config.vocab_size, bias=False)
 
         # Weight tying

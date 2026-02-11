@@ -10,7 +10,7 @@ import torch.nn as nn
 from abc import ABC, abstractmethod
 from typing import Any
 
-from dendritic.experiments.models.DoubtAwareGPT import DoubtAwareGPT
+from dendritic.experiments.models.doubt_conditioning.DoubtAwareGPT import DoubtAwareGPT
 
 
 class TrainingStrategy(ABC):

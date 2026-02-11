@@ -13,7 +13,7 @@ from dendritic.experiments.doubt.validation import (
     validate_experiment_results,
     generate_validation_report,
 )
-from dendritic.experiments.models.DoubtAwareGPT import DoubtAwareGPT
+from dendritic.experiments.models.doubt_conditioning.DoubtAwareGPT import DoubtAwareGPT
 from dendritic.experiments.doubt.config import DoubtExperimentConfig
 from dendritic.experiments.doubt.results import (
     DoubtTrainingResult,
@@ -144,14 +144,17 @@ class TestValidateLossPredictions:
     def mock_doubt_model(self):
         """Create a mock DoubtAwareGPT model."""
         model = Mock(spec=DoubtAwareGPT)
+        # Set doubt_vector_dim for shape validation
+        model.doubt_vector_dim = 1
 
         # Mock forward method to return loss prediction values
         # Updated to match new API: labels=None, doubt_scalars=None
         def mock_forward(input_ids, labels=None, doubt_scalars=None):
             batch_size, seq_len = input_ids.shape
+            V = model.doubt_vector_dim
             # Create loss prediction values (raw linear outputs)
             # Range ~2-4 due to loss_init_bias=2.0
-            loss_pred = 2.0 + torch.randn(batch_size, seq_len) * 0.5
+            loss_pred = 2.0 + torch.randn(batch_size, seq_len, V) * 0.5
 
             return {"loss_prediction": loss_pred}
 
@@ -171,14 +174,15 @@ class TestValidateLossPredictions:
         attention_mask = torch.ones_like(input_ids)
 
         # Mock the model to return valid loss predictions (around 2.0)
-        loss_pred = 2.0 + torch.randn(batch_size, seq_len) * 0.5  # Values around 2.0
+        V = mock_doubt_model.doubt_vector_dim
+        loss_pred = 2.0 + torch.randn(batch_size, seq_len, V) * 0.5  # Values around 2.0
         mock_output = {"loss_prediction": loss_pred}
 
         with patch.object(mock_doubt_model, "__call__", return_value=mock_output):
             result = validate_loss_predictions(mock_doubt_model, input_ids, attention_mask, threshold=0.95)
 
         # Check result structure
-        assert result["shape"] == (batch_size, seq_len)
+        assert result["shape"] == (batch_size, seq_len, V)
         assert result["has_nan"] == False
         assert result["has_inf"] == False
         # percent_in_range no longer exists in new validation function
@@ -204,13 +208,15 @@ class TestValidateLossPredictions:
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
         attention_mask = torch.ones_like(input_ids)
 
-        # Create loss prediction with NaN
-        loss_pred = torch.ones(batch_size, seq_len)
-        loss_pred[0, 0] = torch.tensor(float("nan"))
+        # Create loss prediction with NaN, shape [B, T, 1]
+        V = 1
+        loss_pred = torch.ones(batch_size, seq_len, V)
+        loss_pred[0, 0, 0] = torch.tensor(float("nan"))
 
         # Create a mock model that returns our loss prediction
         mock_model = Mock(spec=DoubtAwareGPT)
         mock_model.eval = Mock()
+        mock_model.doubt_vector_dim = V
 
         # Mock the __call__ method to return dict with loss_prediction
         mock_output = {"loss_prediction": loss_pred}
@@ -230,12 +236,10 @@ class TestValidateLossPredictions:
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
         attention_mask = torch.ones_like(input_ids)
 
+        V = mock_doubt_model.doubt_vector_dim
         # Create loss prediction with unreasonable mean (far from 2.0)
         # Mean = 50.0, which is > 10.0 away from 2.0
-        loss_pred = torch.tensor([
-            [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0],
-            [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0],
-        ])
+        loss_pred = torch.full((batch_size, seq_len, V), 50.0)
 
         # Create a mock function that returns our loss prediction dict
         def mock_call(input_ids, labels=None, doubt_scalars=None):
@@ -260,8 +264,9 @@ class TestValidateLossPredictions:
         input_ids = torch.randint(0, 1000, (batch_size, seq_len))
         attention_mask = torch.ones_like(input_ids)
 
-        # Create loss prediction with wrong shape
-        loss_pred = torch.ones(batch_size, seq_len + 1)  # Wrong shape
+        V = mock_doubt_model.doubt_vector_dim
+        # Create loss prediction with wrong shape: seq_len+1
+        loss_pred = torch.ones(batch_size, seq_len + 1, V)
 
         # Create a mock function that returns our loss prediction dict with wrong shape
         def mock_call(input_ids, labels=None, doubt_scalars=None):
@@ -272,7 +277,7 @@ class TestValidateLossPredictions:
         mock_doubt_model.side_effect = mock_call
 
         # Should raise assertion error
-        with pytest.raises(AssertionError, match="doesn't match input shape"):
+        with pytest.raises(AssertionError, match="doesn't match expected shape"):
             validate_loss_predictions(mock_doubt_model, input_ids, attention_mask)
 
 

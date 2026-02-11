@@ -12,21 +12,19 @@ from dendritic.experiments.utils.PretrainingConfig import (
 class DoubtExperimentConfig(PretrainingConfig):
     """Configuration for doubt-aware experiments.
 
-    Extends PretrainingConfig with doubt-specific parameters for
-    two-pass lookahead training.
+    Extends PretrainingConfig with doubt-specific parameters for doubt-aware experiments.
     """
 
     # Doubt-specific parameters
     doubt_alpha: float = 1.0  # Weight for doubt loss
-    lookahead_steps: int = 2  # Number of steps to look ahead (fixed at 2 for now)
-    doubt_init_bias: float = 2.0  # Initial bias for doubt predictor
+    doubt_vector_dim: int = 1  # Dimension of the doubt vector (1 = scalar, >1 = vectorized)
 
     # Experiment tracking
     results_dir: str = "results/doubt_experiments"
     save_interval: int = 100  # Save intermediate results every N steps
 
     # Token sampling configuration
-    sampling_prompt: str = "Once upon a time"  # Prompt for sampling during evaluation
+    sampling_prompt: str = "It can be shown"  # Prompt for sampling during evaluation
     sampling_temperature: float = 0.8  # Temperature for sampling
     sampling_top_p: float = 0.95  # Top-p (nucleus) sampling parameter
     sampling_max_tokens: int = 50  # Maximum tokens to sample during evaluation

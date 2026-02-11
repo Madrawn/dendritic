@@ -8,7 +8,7 @@ parameters, and perform sanity checks on doubt predictions.
 import torch
 import numpy as np
 from typing import Dict, Tuple, Any
-from dendritic.experiments.models.DoubtAwareGPT import DoubtAwareGPT
+from dendritic.experiments.models.doubt_conditioning.DoubtAwareGPT import DoubtAwareGPT
 from dendritic.experiments.models.MiniGPT import MiniGPT
 
 
@@ -83,8 +83,10 @@ def validate_loss_predictions(
 
     # Basic shape validation
     batch_size, seq_len = input_ids.shape
-    assert loss_pred.shape == (batch_size, seq_len), (
-        f"Loss prediction shape {loss_pred.shape} doesn't match input shape {(batch_size, seq_len)}"
+    V = getattr(doubt_model, "doubt_vector_dim", 1)
+    expected_shape = (batch_size, seq_len, V) if V > 1 else (batch_size, seq_len, 1)
+    assert loss_pred.shape == expected_shape, (
+        f"Loss prediction shape {loss_pred.shape} doesn't match expected shape {expected_shape}"
     )
 
     # Check for NaN or infinite values

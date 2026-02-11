@@ -9,6 +9,7 @@ from dendritic.enhancement import (
     get_polynomial_stats,
     extract_dendritic_state,
 )
+from dendritic.layers import norm
 from dendritic.layers.DendriticLayer import DendriticLayer
 from dendritic.layers.DendriticStack import DendriticStack
 from unittest.mock import patch, MagicMock
@@ -46,16 +47,14 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attn = nn.MultiheadAttention(64, 8)
         self.mlp = nn.Sequential(nn.Linear(64, 256), nn.GELU(), nn.Linear(256, 64))
-        self.ln1 = nn.LayerNorm(64)
-        self.ln2 = nn.LayerNorm(64)
 
     def forward(self, x):
         attn_out, _ = self.attn(x, x, x)
         x = x + attn_out
-        x = self.ln1(x)
+        x = norm(x)
         mlp_out = self.mlp(x)
         x = x + mlp_out
-        return self.ln2(x)
+        return norm(x)
 
 
 @pytest.fixture
@@ -92,24 +91,18 @@ def test_basic_enhancement(simple_mlp):
     # Verify trainable parameters
     trainable_params = sum(p.numel() for p in enhanced.parameters() if p.requires_grad)
     assert trainable_params > 0
-    assert (
-        trainable_params < enhanced_params
-    )  # Only dendritic params should be trainable
+    assert trainable_params < enhanced_params  # Only dendritic params should be trainable
 
 
 @pytest.mark.unit
 def test_dendritic_layer_types(simple_mlp):
     """Test different dendritic layer types (individual, stack, mlp)"""
     # Test DendriticLayer
-    enhanced_layer = enhance_model_with_dendritic(
-        simple_mlp, dendritic_cls=DendriticLayer
-    )
+    enhanced_layer = enhance_model_with_dendritic(simple_mlp, dendritic_cls=DendriticLayer)
     assert any(isinstance(m, DendriticLayer) for m in enhanced_layer.modules())
 
     # Test DendriticStack
-    enhanced_stack = enhance_model_with_dendritic(
-        simple_mlp, dendritic_cls=DendriticStack
-    )
+    enhanced_stack = enhance_model_with_dendritic(simple_mlp, dendritic_cls=DendriticStack)
     assert any(isinstance(m, DendriticStack) for m in enhanced_stack.modules())
 
 
@@ -119,15 +112,9 @@ def test_layer_placement_strategies(simple_mlp):
     # Test selective layer enhancement
     enhanced_selective = enhance_model_with_dendritic(simple_mlp, target_layers=["fc1"])
     named_modules = [*enhanced_selective.named_modules()]
-    fc1_replaced = any(
-        isinstance(m, (DendriticLayer, DendriticStack))
-        for name, m in named_modules
-        if "fc1" in name
-    )
+    fc1_replaced = any(isinstance(m, (DendriticLayer, DendriticStack)) for name, m in named_modules if "fc1" in name)
     fc2_not_replaced = all(
-        not isinstance(m, (DendriticLayer, DendriticStack))
-        for name, m in named_modules
-        if "fc2" in name
+        not isinstance(m, (DendriticLayer, DendriticStack)) for name, m in named_modules if "fc2" in name
     )
     assert fc1_replaced
     assert fc2_not_replaced
@@ -137,14 +124,8 @@ def test_layer_placement_strategies(simple_mlp):
 def test_enhancement_ratios(simple_mlp):
     """Test enhancement ratios and scaling factors"""
     # Test auto poly_rank
-    enhanced_auto = enhance_model_with_dendritic(
-        simple_mlp, poly_rank="auto", target_layers=["fc3"]
-    )
-    dendritic_layer = next(
-        m
-        for m in enhanced_auto.modules()
-        if isinstance(m, (DendriticLayer, DendriticStack))
-    )
+    enhanced_auto = enhance_model_with_dendritic(simple_mlp, poly_rank="auto", target_layers=["fc3"])
+    dendritic_layer = next(m for m in enhanced_auto.modules() if isinstance(m, (DendriticLayer, DendriticStack)))
     assert dendritic_layer.poly_rank == max(4, 256 // 64)
 
 
@@ -152,11 +133,7 @@ def test_enhancement_ratios(simple_mlp):
 def test_enhancement_fixed(simple_mlp):
     # Test fixed poly_rank
     enhanced_fixed = enhance_model_with_dendritic(simple_mlp, poly_rank=32)
-    dendritic_layer = next(
-        m
-        for m in enhanced_fixed.modules()
-        if isinstance(m, (DendriticLayer, DendriticStack))
-    )
+    dendritic_layer = next(m for m in enhanced_fixed.modules() if isinstance(m, (DendriticLayer, DendriticStack)))
     assert dendritic_layer.poly_rank == 32
 
 
@@ -166,11 +143,7 @@ def test_selective_layer_enhancement(simple_mlp):
     """Test selective layer enhancement"""
     enhanced = enhance_model_with_dendritic(simple_mlp, target_layers=["fc1", "fc3"])
 
-    replaced_layers = [
-        name
-        for name, m in enhanced.named_modules()
-        if isinstance(m, (DendriticLayer, DendriticStack))
-    ]
+    replaced_layers = [name for name, m in enhanced.named_modules() if isinstance(m, (DendriticLayer, DendriticStack))]
 
     assert any("fc1" in name for name in replaced_layers)
     assert any("fc3" in name for name in replaced_layers)
@@ -264,9 +237,7 @@ def test_layer_config_serialization(simple_mlp):
     )
 
     # Verify config attributes
-    dendritic_layer = next(
-        m for m in enhanced.modules() if isinstance(m, (DendriticLayer, DendriticStack))
-    )
+    dendritic_layer = next(m for m in enhanced.modules() if isinstance(m, (DendriticLayer, DendriticStack)))
     assert dendritic_layer.poly_rank == 16
     if hasattr(dendritic_layer, "dropout"):
         dropout_attr = dendritic_layer.dropout
@@ -302,9 +273,7 @@ def test_extract_and_load_dendritic_state(simple_mlp):
     new_enhanced = apply_dendritic_state(SimpleMLP(), state)
 
     # Verify parameters match
-    for (n1, p1), (n2, p2) in zip(
-        enhanced.named_parameters(), new_enhanced.named_parameters()
-    ):
+    for (n1, p1), (n2, p2) in zip(enhanced.named_parameters(), new_enhanced.named_parameters()):
         if p1.requires_grad:
             assert torch.allclose(p1, p2)
 
@@ -342,6 +311,4 @@ def test_create_dendritic_state(simple_mlp):
     new_enhanced = apply_dendritic_state(SimpleMLP(), state_payload=state)
 
     # Verify it's enhanced
-    assert any(
-        isinstance(m, (DendriticLayer, DendriticStack)) for m in new_enhanced.modules()
-    )
+    assert any(isinstance(m, (DendriticLayer, DendriticStack)) for m in new_enhanced.modules())

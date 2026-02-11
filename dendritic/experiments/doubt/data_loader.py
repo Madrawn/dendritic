@@ -1,8 +1,7 @@
 """
 Data loading utilities for doubt-aware GPT experiments.
 
-This module provides functions to prepare data for two-pass lookahead training,
-where we need tokens at positions t and t+1.
+This module provides functions to prepare data for doubt-aware experiments, where we need tokens at positions t and t+1.
 """
 
 from typing import Dict, Any, Tuple, Optional
@@ -56,7 +55,7 @@ def prepare_doubt_data(
     num_workers: int = 0,
 ) -> Dict[str, DataLoader]:
     """
-    Prepare data for doubt-aware experiments with two-pass lookahead training.
+    Prepare data for doubt-aware experiments with lookahead training.
 
     This function loads standard dataset using existing dataset handlers,
     creates sequences of length `seq_len + 1` (where seq_len is the context window),

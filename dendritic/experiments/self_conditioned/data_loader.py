@@ -6,6 +6,7 @@ which uses standard next-token prediction with sequences of length seq_len + 1,
 producing pairs (tokens_t, tokens_t_plus_1).
 """
 
+import logging
 from typing import Dict, Any, Tuple, Optional
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -65,7 +66,7 @@ def prepare_self_conditioned_data(
         tokenizer,
         max_length=config.max_seq_len + 1,
     )
-
+    logging.info(f"Preparing data using handler: {handler.__class__.__name__}")
     modified_config = _create_modified_config(config)
 
     standard_loaders = handler.prepare_pretraining_dataloaders(

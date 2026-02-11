@@ -1,9 +1,9 @@
-from dataclasses import dataclass, field
-from dendritic.experiments.utils.PretrainingConfig import PretrainingConfig
+from dataclasses import dataclass
+from dendritic.experiments.doubt.config import DoubtExperimentConfig
 
 
 @dataclass
-class SelfConditionedExperimentConfig(PretrainingConfig):
+class SelfConditionedExperimentConfig(DoubtExperimentConfig):
     """Configuration for self-conditioned experiments.
 
     Extends PretrainingConfig with parameters specific to SelfConditionedGPT.
@@ -18,7 +18,7 @@ class SelfConditionedExperimentConfig(PretrainingConfig):
     save_interval: int = 100  # Save intermediate results every N steps
 
     # Token sampling configuration
-    sampling_prompt: str = "Once upon a time"
+    sampling_prompt: str = "The"
     sampling_temperature: float = 0.8
     sampling_top_p: float = 0.95
     sampling_max_tokens: int = 50

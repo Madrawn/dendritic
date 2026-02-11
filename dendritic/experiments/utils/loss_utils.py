@@ -37,29 +37,6 @@ def compute_language_modeling_loss(
     )
 
 
-def compute_doubt_loss(
-    loss_prediction: torch.Tensor,
-    future_losses: torch.Tensor,
-    reduction: str = "mean",
-) -> torch.Tensor:
-    """
-    Compute loss prediction loss using MSE.
-
-    Args:
-        loss_prediction: Predicted loss values of shape [batch_size, seq_len]
-        future_losses: Actual future losses of shape [batch_size, seq_len]
-        reduction: Loss reduction method ('mean', 'sum', or 'none')
-
-    Returns:
-        Loss prediction error tensor
-    """
-    return F.mse_loss(
-        loss_prediction,
-        future_losses.detach(),
-        reduction=reduction,
-    )
-
-
 def compute_sequence_language_modeling_loss(
     logits: torch.Tensor,
     labels: torch.Tensor,
@@ -117,40 +94,3 @@ def compute_sequence_language_modeling_loss(
             return torch.tensor(0.0, device=logits.device)
     else:
         raise ValueError(f"Invalid reduction: {reduction}")
-
-
-def compute_total_doubt_aware_loss(
-    logits: torch.Tensor,
-    loss_prediction: torch.Tensor,
-    labels: torch.Tensor,
-    future_losses: torch.Tensor,
-    alpha: float = 1.0,
-    ignore_index: int = -100,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Compute total loss for loss-prediction-aware models.
-
-    Args:
-        logits: Token prediction logits of shape [batch_size, seq_len, vocab_size]
-        loss_prediction: Loss predictions of shape [batch_size, seq_len]
-        labels: Target labels of shape [batch_size, seq_len]
-        future_losses: Actual future losses of shape [batch_size, seq_len]
-        alpha: Weight for loss prediction loss
-        ignore_index: Token index to ignore in loss computation
-
-    Returns:
-        Tuple of (total_loss, lm_loss, loss_prediction_loss)
-    """
-    # Language modeling loss (only up to seq_len-1 for valid next tokens)
-    lm_loss = compute_language_modeling_loss(logits, labels, ignore_index)
-
-    # Loss prediction loss (only up to seq_len-1 where we have future losses)
-    # Note: loss_prediction and future_losses should already be aligned
-    loss_prediction_loss = compute_doubt_loss(
-        loss_prediction[:, :-1],  # Exclude last position
-        future_losses[:, :-1],  # Exclude last position
-    )
-
-    total_loss = lm_loss + alpha * loss_prediction_loss
-
-    return total_loss, lm_loss, loss_prediction_loss

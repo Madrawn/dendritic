@@ -35,7 +35,7 @@ def sample_tokens_from_model(
     prompt: str,
     *,
     config: SamplingConfig,
-) -> tuple[str, list[float] | None, list[int], list[int]]:
+) -> tuple[str, list[int], list[int]]:
     """
     Sample tokens from a MiniGPT or DoubtAwareGPT model using autoregressive generation.
 
@@ -52,10 +52,8 @@ def sample_tokens_from_model(
         config: Sampling configuration (SamplingConfig)
 
     Returns:
-        tuple: (generated_text, loss_predictions, generated_token_ids, full_token_ids)
+        tuple: (generated_text, generated_token_ids, full_token_ids)
         - generated_text: Generated text (including prompt)
-        - loss_predictions: List of loss predictions for each generated token,
-                           or None if model is not DoubtAwareGPT
         - generated_token_ids: List of token IDs for generated tokens only
         - full_token_ids: Complete sequence of token IDs (prompt + generated)
     """
@@ -69,14 +67,9 @@ def sample_tokens_from_model(
     generated_token_ids = []
     full_token_ids = input_ids[0].tolist()  # Start with prompt token IDs
 
-    # Track loss predictions if model is DoubtAwareGPT
-    is_doubt_model = hasattr(model, "loss_predictor")
-    loss_predictions_list = [] if is_doubt_model else None
-
     # Initialize loss prediction scalars for the first step
     # For doubt models with config.use_doubt=False, we pass None (model uses zeros)
     # For doubt models with config.use_doubt=True, we'll build loss prediction scalars as we generate
-    doubt_scalars = None  # This remains "doubt_scalars" as it's the input to the model
     model_max_len = model.max_seq_len
     current_len = input_ids.shape[1]
     effective_max_new_tokens = config.max_new_tokens
@@ -86,25 +79,13 @@ def sample_tokens_from_model(
             f"Truncating generation to {effective_max_new_tokens} tokens to respect max_seq_len={model_max_len}"
         )
     if effective_max_new_tokens <= 0:
-        return tokenizer.decode(input_ids[0]), None, [], input_ids[0].tolist()
+        return tokenizer.decode(input_ids[0]), [], input_ids[0].tolist()
     if effective_max_new_tokens > 1000:  # Reasonable upper limit
         logging.warning(f"max_new_tokens ({effective_max_new_tokens}) is very large, may cause memory issues")
     with torch.no_grad():
         for _ in range(effective_max_new_tokens):
             # Get model output
-            logits, doubt_value = _get_model_logits(model, generated, is_doubt_model, doubt_scalars)
-
-            # Store loss prediction if available
-            if doubt_value is not None and loss_predictions_list is not None:
-                loss_predictions_list.append(doubt_value)
-
-            # Update doubt scalars for next iteration if using doubt model
-            if is_doubt_model and config.use_doubt:
-                # loss_predictions_list is guaranteed to be not None when is_doubt_model is True
-                assert loss_predictions_list is not None
-                doubt_scalars = _update_doubt_scalars_after_append(
-                    loss_predictions_list, generated.shape[1] + 1, config.device
-                )
+            logits, loss_pred_tensor = _get_model_logits(model, generated)
 
             # Sample next token
             next_token = _sample_next_token(logits, config.temperature, config.top_p)
@@ -122,38 +103,41 @@ def sample_tokens_from_model(
 
     # Decode the full sequence
     full_text = tokenizer.decode(generated[0], skip_special_tokens=True)
-    return full_text, loss_predictions_list, generated_token_ids, full_token_ids
+    return full_text, generated_token_ids, full_token_ids
 
 
-def _get_model_logits(
-    model: nn.Module, generated: torch.Tensor, is_doubt_model: bool, doubt_scalars: torch.Tensor | None
-) -> tuple[torch.Tensor, float | None]:
+def _get_model_logits(model: nn.Module, generated: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Get logits from model, handling both doubt and non-doubt models."""
     if not hasattr(model, "forward") or not callable(model.forward):
         raise ValueError(f"Model doesn't have a forward method: {type(model)}")
 
-    if is_doubt_model:
-        outputs = model(generated, doubt_scalars=doubt_scalars)
-        logits = outputs["logits"]
-        loss_prediction = outputs["loss_prediction"]
-        last_doubt = None
-        if loss_prediction is not None:
-            last_doubt = loss_prediction[:, -1].item()
-        return logits, last_doubt
     else:
         logits = model(generated)
         return logits, None
 
 
-def _update_doubt_scalars_after_append(loss_predictions_list: list, next_seq_len: int, device: str) -> torch.Tensor:
-    """Update doubt scalars for the next forward pass after appending a token."""
-    doubt_tensor = torch.zeros((1, next_seq_len, 1), device=device, dtype=torch.float32)
+def _update_doubt_scalars_after_append(
+    loss_prediction_vectors: list[torch.Tensor], next_seq_len: int, device: str, doubt_vector_dim: int
+) -> torch.Tensor:
+    """Update doubt scalars for the next forward pass after appending a token.
 
-    if len(loss_predictions_list) > 0:
-        fill_length = min(len(loss_predictions_list), next_seq_len - 1)
-        doubt_tensor[0, 1 : 1 + fill_length, 0] = torch.tensor(
-            loss_predictions_list[:fill_length], device=device, dtype=torch.float32
-        )
+    Args:
+        loss_prediction_vectors: List of vectors (each of shape [V]) from previous steps
+        next_seq_len: The new sequence length after token append
+        device: Device to create tensor on
+        doubt_vector_dim: The dimension V of the doubt vector
+
+    Returns:
+        Tensor of shape [1, next_seq_len, V] with zeros at position 0 and vectors at positions 1..k
+    """
+    doubt_tensor = torch.zeros((1, next_seq_len, doubt_vector_dim), device=device, dtype=torch.float32)
+
+    if len(loss_prediction_vectors) > 0:
+        fill_length = min(len(loss_prediction_vectors), next_seq_len - 1)
+        # Stack vectors into a tensor of shape [fill_length, V]
+        vectors = torch.stack(loss_prediction_vectors[:fill_length], dim=0)
+        # Assign to positions 1..fill_length+1
+        doubt_tensor[0, 1 : 1 + fill_length, :] = vectors
     return doubt_tensor
 
 
@@ -220,7 +204,7 @@ def sample_model_output(
     prompt: str,
     *,
     config: SamplingConfig,
-) -> tuple[str, list[float] | None, str | None]:
+) -> str:
     """
     Generate sample output from model and return as string.
 
@@ -234,30 +218,18 @@ def sample_model_output(
         config: Sampling configuration (SamplingConfig)
 
     Returns:
-        tuple: (generated_text, loss_predictions, formatted_tokens_with_doubt)
-        - generated_text: Generated text
-        - loss_predictions: List of loss predictions or None
-        - formatted_tokens_with_doubt: Formatted tokens with loss predictions or None
+        str: Generated text
     """
     try:
-        generated, loss_predictions, generated_token_ids, full_token_ids = sample_tokens_from_model(
+        generated, generated_token_ids, full_token_ids = sample_tokens_from_model(
             model=model,
             tokenizer=tokenizer,
             prompt=prompt,
             config=config,
         )
 
-        formatted_tokens = None
-        if config.include_doubt_formatting and loss_predictions is not None:
-            formatted_tokens = format_tokens_with_doubt(
-                tokenizer=tokenizer,
-                generated_token_ids=generated_token_ids,
-                loss_predictions=loss_predictions,
-                doubt_precision=1,
-            )
-
-        return generated, loss_predictions, formatted_tokens
+        return generated
 
     except Exception as e:
         logger.error(f"Error during sampling: {e}")
-        return f"[Sampling error: {e}]", None, None
+        raise e

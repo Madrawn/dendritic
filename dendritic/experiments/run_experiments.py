@@ -6,7 +6,6 @@ Usage:
     python -m dendritic.experiments.run_experiments --experiment pretraining
     python -m dendritic.experiments.run_experiments --experiment finetuning
     python -m dendritic.experiments.run_experiments --experiment both
-    python -m dendritic.experiments.run_experiments --experiment doubt
     python -m dendritic.experiments.run_experiments --experiment self_conditioned
 """
 
@@ -382,60 +381,6 @@ def main() -> None:
         logger.info("=" * 70)
         run_finetuning_experiment_wrapper(args.device, args.num_workers)
 
-    if args.experiment == "doubt":
-        # Import here to avoid circular imports
-        from dendritic.experiments.doubt.config import DoubtExperimentConfig
-        from dendritic.experiments.doubt.experiment import (
-            DoubtAwareExperiment,
-        )
-
-        logger.info("\n" + "=" * 70)
-        logger.info("RUNNING DOUBT-AWARE EXPERIMENT")
-        logger.info("=" * 70)
-        # Create tokenizer (same as other experiments)
-        tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-        tokenizer.pad_token = tokenizer.eos_token
-
-        # Create configuration with reasonable defaults
-        NUM_HEADS = 6
-        HEAD_DIM = 100
-        BATCH_SIZE = 5
-        config = DoubtExperimentConfig(
-            # Reasonable for PoC
-            training_steps=math.floor(55000 / BATCH_SIZE**2) * BATCH_SIZE,
-            seeds=[42],
-            batch_size=BATCH_SIZE,
-            vocab_size=50257,  # GPT-2 vocab size
-            embed_dim=NUM_HEADS * HEAD_DIM,
-            num_heads=NUM_HEADS,
-            num_layers=8,
-            max_seq_len=512,
-            eval_smoothing_factor=0.33,
-            dropout=0.0,
-            scheduler_type="no",
-            results_dir="results/doubt_experiments",
-            dataset="tinystories",
-            do_compile=True,
-            min_eval_improvement=0.0,
-            seq_stride=128,  # 0=no overlap, 1=max overlap, 2=every other, etc.
-            grouped=True,  # Required for sliding window to be used
-        )
-
-        # Calculate appropriate max_samples based on training configuration
-        # When grouped=False (default), each sample produces at most 1 block
-        required_max_samples = calculate_required_max_samples(config)
-        config.dataset_kwargs = {"max_samples": required_max_samples}
-
-        logger.info(
-            f"Calculated max_samples: {required_max_samples} "
-            f"(based on {config.training_steps} steps, batch_size={config.batch_size})"
-        )
-
-        # Run the experiment
-        experiment = DoubtAwareExperiment(config)
-        experiment.run(tokenizer)
-        logger.info(f"Doubt experiment completed. Results saved to {config.results_dir}")
-
     if args.experiment == "self_conditioned":
         # Import here to avoid circular imports
         from dendritic.experiments.self_conditioned.config import SelfConditionedExperimentConfig
@@ -453,26 +398,30 @@ def main() -> None:
         NUM_HEADS = 6
         HEAD_DIM = 100
         BATCH_SIZE = 5
+        NUM_LAYERS = 8
         config = SelfConditionedExperimentConfig(
-            training_steps=math.floor(55000 / BATCH_SIZE**2) * BATCH_SIZE,
+            training_steps=math.floor(15000 / BATCH_SIZE**2) * BATCH_SIZE,
             seeds=[42],
             batch_size=BATCH_SIZE,
             vocab_size=50257,
             embed_dim=NUM_HEADS * HEAD_DIM,
             num_heads=NUM_HEADS,
-            num_layers=8,
+            num_layers=NUM_LAYERS,
             max_seq_len=512,
             dropout=0.0,
             scheduler_type="no",
             results_dir="results/self_conditioned_experiments",
-            dataset="tinystories",
+            dataset="openwebmath",
             do_compile=True,
             min_eval_improvement=0.0,
             seq_stride=128,
             grouped=True,
+            eval_batches=50,
             # Self-conditioned specific
             bound_fn="none",
-            take_meta=3,
+            take_meta=NUM_LAYERS,
+            eval_smoothing_factor=0.1,
+            doubt_vector_dim=NUM_HEADS,  # Use a vector of doubts corresponding to each attention head
         )
 
         # Calculate appropriate max_samples based on training configuration

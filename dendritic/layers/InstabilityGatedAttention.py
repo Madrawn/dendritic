@@ -53,30 +53,16 @@ class InstabilityGatedAttention(nn.Module):
         batch, seq_len, _ = x.shape
 
         # Project Q, K, V
-        Q = (
-            self.W_q(x)
-            .view(batch, seq_len, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
-        K = (
-            self.W_k(x)
-            .view(batch, seq_len, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
-        V = (
-            self.W_v(x)
-            .view(batch, seq_len, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
+        Q = self.W_q(x).view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        K = self.W_k(x).view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        V = self.W_v(x).view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
         # Compute attention scores (before softmax)
         attn_logits = Q @ K.transpose(-2, -1) * self.scale  # (batch, heads, seq, seq)
 
         # Apply causal mask
         if causal_mask:
-            mask = torch.triu(
-                torch.ones(seq_len, seq_len, device=x.device), diagonal=1
-            ).bool()
+            mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1).bool()
             attn_logits = attn_logits.masked_fill(mask, float("-inf"))
 
         # Standard softmax attention weights
@@ -88,9 +74,7 @@ class InstabilityGatedAttention(nn.Module):
             drift_scores = self.drift_probe(x).squeeze(-1)  # (batch, seq_len)
 
         # Convert drift to gate values in [-1, +1]
-        gate = self.drift_to_gate(drift_scores.unsqueeze(-1)).squeeze(
-            -1
-        )  # (batch, seq_len)
+        gate = self.drift_to_gate(drift_scores.unsqueeze(-1)).squeeze(-1)  # (batch, seq_len)
 
         # Apply gate to attention weights
         # gate > 0: trust this position (weight preserved or amplified)
@@ -133,11 +117,7 @@ def convert_to_inhibitory_attention(model, layer_indices=[12, 13, 14]):
         new_attn = InstabilityGatedAttention(
             embed_dim=old_attn.hidden_size,
             num_heads=old_attn.num_heads,
-            dropout=(
-                old_attn.attention_dropout
-                if hasattr(old_attn, "attention_dropout")
-                else 0.0
-            ),
+            dropout=(old_attn.attention_dropout if hasattr(old_attn, "attention_dropout") else 0.0),
         )
 
         # Initialize with weights from original (for Q, K, V, O projections)

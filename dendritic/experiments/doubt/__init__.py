@@ -1,13 +1,11 @@
 """
 Doubt-aware GPT experiment module.
 
-This module provides components for running doubt-aware GPT experiments
-comparing DoubtAwareGPT (with two-pass lookahead training) vs standard MiniGPT.
+This module provides components for running doubt-aware GPT experiments comparing DoubtAwareGPT vs standard MiniGPT.
 """
 
 from .config import DoubtExperimentConfig
 from .data_loader import prepare_doubt_data
-from .experiment import DoubtAwareExperiment
 from .results import (
     DoubtTrainingResult,
     DoubtExperimentResults,
@@ -25,7 +23,6 @@ from .visualization import (
 __all__ = [
     "DoubtExperimentConfig",
     "prepare_doubt_data",
-    "DoubtAwareExperiment",
     "DoubtTrainingResult",
     "DoubtExperimentResults",
     "save_results",

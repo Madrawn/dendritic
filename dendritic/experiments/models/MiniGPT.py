@@ -3,6 +3,8 @@ from dendritic.experiments.models.BaseGPT import BaseGPT
 
 import torch
 
+from dendritic.layers import norm
+
 
 class MiniGPT(BaseGPT):
     """
@@ -30,7 +32,7 @@ class MiniGPT(BaseGPT):
         x, _ = self.forward_through_blocks(x, mask)
 
         # Final normalization and projection
-        x = self.ln_f(x)
+        x = norm(x)
         logits = self.head(x)
 
         return logits

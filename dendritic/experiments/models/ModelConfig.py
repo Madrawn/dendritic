@@ -32,3 +32,4 @@ class ModelConfig:
     poly_rank: int = 16
     poly_degree: int = 3
     dropout: float = 0.0
+    doubt_vector_dim: int = 1  # Dimension of the doubt vector (1 = scalar, >1 = vectorized)

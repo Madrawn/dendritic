@@ -13,7 +13,7 @@ import torch
 import numpy as np
 from pathlib import Path
 
-from dendritic.experiments.models.SelfConditionedGPT import SelfConditionedGPT
+from dendritic.experiments.models.doubt_conditioning.SelfConditionedGPT import SelfConditionedGPT
 from dendritic.experiments.models.MiniGPT import MiniGPT
 from dendritic.experiments.models.ModelConfig import ModelConfig
 from dendritic.experiments.utils.TrainingResult import TrainingResult
@@ -33,9 +33,8 @@ class SelfConditionedExperiment:
     """
     Experiment comparing MiniGPT vs SelfConditionedGPT.
 
-    Both models are trained with standard next-token prediction.
-    SelfConditionedGPT uses an internal two-pass forward to generate
-    its own conditioning signal, but from the trainer's perspective it
+        Both models are trained with standard next-token prediction.
+    SelfConditionedGPT uses an internal forward to generate its own conditioning signal, but from the trainer's perspective it
     is a standard model returning logits.
     """
 
@@ -100,6 +99,7 @@ class SelfConditionedExperiment:
             dropout=self.config.dropout,
             poly_rank=16,
             poly_degree=3,
+            doubt_vector_dim=self.config.doubt_vector_dim,
         )
         self_conditioned_model = SelfConditionedGPT(
             config=self_cond_config,
@@ -242,6 +242,16 @@ class SelfConditionedExperiment:
             )
             self_conditioned_results[str(seed)] = [self_cond_result]
             training_times["self_conditioned"].append(self_cond_result.training_time)
+
+            # Recreate dataloaders for standard model to ensure fresh iterator state
+            logging.info("Recreating dataloaders for standard model...")
+            dataloaders = prepare_self_conditioned_data(
+                config=self.config,
+                tokenizer=tokenizer,
+                dataset_kwargs=self.config.dataset_kwargs,
+            )
+            train_loader = dataloaders["train"]
+            eval_loader = dataloaders["eval"]
 
             # Train standard model
             logging.info(f"Training standard model (seed={seed})...")

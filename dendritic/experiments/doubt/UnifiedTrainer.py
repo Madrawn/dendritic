@@ -7,6 +7,7 @@ differences in separate strategy classes.
 """
 
 from typing import cast
+
 from dendritic.experiments.utils.TrainingResult import TrainingResult
 from dendritic.experiments.utils.experiment_utils import set_random_seed
 from dendritic.experiments.doubt.TrainingStrategy import TrainingStrategy
@@ -197,7 +198,7 @@ class UnifiedTrainer:
                 use_doubt=use_doubt,
                 include_doubt_formatting=True,
             )
-            generated, loss_predictions, formatted_tokens_with_doubt = sample_model_output(
+            generated = sample_model_output(
                 model=model,
                 tokenizer=self.tokenizer,
                 prompt=self.config.sampling_prompt,
@@ -208,11 +209,6 @@ class UnifiedTrainer:
             truncated = generated[:100] + "..." if len(generated) > 100 else generated
             log_message = f"{self.model_type} seed={seed} step={step}: eval_loss={eval_loss:.4f}, sampled: {truncated}"
 
-            # Add loss predictions to log if available
-            if loss_predictions is not None and len(loss_predictions) > 0:
-                avg_loss_pred = sum(loss_predictions) / len(loss_predictions)
-                log_message += f", avg_loss_pred={avg_loss_pred:.4f}"
-
             logging.info(log_message)
 
             # Save full version to text file
@@ -222,8 +218,6 @@ class UnifiedTrainer:
                 model_type=self.model_type,
                 eval_loss=eval_loss,
                 sampled_text=generated,
-                loss_predictions=loss_predictions,
-                formatted_tokens_with_doubt=formatted_tokens_with_doubt,
             )
 
         except Exception as e:
@@ -248,7 +242,6 @@ class UnifiedTrainer:
             model_type: Type of model
             eval_loss: Evaluation loss
             sampled_text: Full sampled text
-            loss_predictions: Optional list of loss predictions
         """
         from datetime import datetime
         from pathlib import Path
@@ -267,15 +260,6 @@ class UnifiedTrainer:
             f.write(f"Timestamp: {datetime.now().isoformat()}\n")
             f.write(f"Eval Loss: {eval_loss:.4f}\n")
             f.write(f"Sampled Tokens: {sampled_text}\n")
-
-            # Add loss predictions if available
-            if loss_predictions is not None and len(loss_predictions) > 0:
-                f.write(f"Loss Predictions: {loss_predictions}\n")
-                f.write(f"Avg Loss Prediction: {sum(loss_predictions) / len(loss_predictions):.4f}\n")
-
-                # Add formatted tokens with doubt if available
-                if formatted_tokens_with_doubt is not None:
-                    f.write(f"Sampled Tokens with Doubt: {formatted_tokens_with_doubt}\n")
 
             f.write("=" * 40 + "\n\n")
 
@@ -475,6 +459,7 @@ class UnifiedTrainer:
                         getattr(self.config, "eval_batches", 10),
                         self.device,
                     )
+
                 # torch.cuda.memory._dump_snapshot("snappershop.pickle")
                 # torch.cuda.memory._record_memory_history(enabled=None)
 
@@ -569,6 +554,7 @@ class UnifiedTrainer:
             optimizer,
             scheduler,
         )
+        torch._dynamo.reset()
         gc.collect()
         if self.use_cuda:
             torch.cuda.empty_cache()
